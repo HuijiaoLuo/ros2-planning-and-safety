@@ -559,6 +559,25 @@ velocity and reports a recovery-timeout error. This is a fail-safe experiment
 termination condition for infeasible planner/safety combinations; it is not a
 replacement for replanning.
 
+### Representative planner/safety alignment experiment
+
+The following runs use the same world, start pose, goal, and controller. Only
+the minimum safety clearance and the planner's obstacle-inflation radius are
+changed:
+
+| Case | Minimum clearance | Planning radius | Success | Time to goal (s) | Travelled (m) | Minimum measured clearance (m) | Safety override ratio | Collision |
+| --- | ---: | ---: | :---: | ---: | ---: | ---: | ---: | :---: |
+| Baseline | 0.50 m | 0.35 m | yes | 67.74 | 3.783 | 0.520 | 0.000 | false |
+| Mismatched constraints | 0.55 m | 0.35 m | no | -- | 0.536 | 0.538 | 0.658 | false |
+| Aligned constraints | 0.55 m | 0.55 m | yes | 73.66 | 4.195 | 0.735 | 0.000 | false |
+
+The mismatched case demonstrates why the safety supervisor cannot be treated
+as a substitute for planning: the planner generated a route that approached
+an obstacle more closely than the runtime safety threshold allowed. The
+supervisor prevented collision, but the robot could not complete the route
+before the recovery timeout. Increasing the planning radius produced a longer
+route, but restored feasibility and increased the measured clearance.
+
 ## 12. Current status and roadmap
 
 The current ROS2 milestone includes:
