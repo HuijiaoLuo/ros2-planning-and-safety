@@ -516,10 +516,11 @@ run, the robot has not traversed the full planned route, so dividing the
 initial full-path length by partial travelled distance would produce a
 misleading value greater than one.
 
-The CSV also reports `path_length_ratio`, defined as
+The CSV also reports `path_length_ratio`. In the equation below, this metric is
+denoted by $r_{\mathrm{path}}$:
 
 $$
-\mathrm{path\_length\_ratio}=\frac{L_{\mathrm{travelled}}}{L_{\mathrm{planned}}}
+r_{\mathrm{path}}=\frac{L_{\mathrm{travelled}}}{L_{\mathrm{planned}}}
 $$
 
 The initial planned path is a grid polyline, while the executed trajectory is
