@@ -1,10 +1,17 @@
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
 from launch_ros.actions import Node
+from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                "evaluation_output",
+                default_value="",
+                description="Optional CSV path for closed-loop evaluation metrics.",
+            ),
             Node(
                 package="robotics_nav",
                 executable="path_follower",
@@ -60,6 +67,20 @@ def generate_launch_description():
                         "goal_x": 2.0,
                         "goal_y": 0.0,
                         "robot_radius_m": 0.35,
+                    }
+                ],
+            ),
+            Node(
+                package="robotics_nav",
+                executable="evaluation_logger",
+                name="evaluation_logger",
+                output="screen",
+                parameters=[
+                    {
+                        "goal_tolerance": 0.05,
+                        "front_angle_deg": 60.0,
+                        "sample_rate_hz": 20.0,
+                        "output_path": LaunchConfiguration("evaluation_output"),
                     }
                 ],
             ),

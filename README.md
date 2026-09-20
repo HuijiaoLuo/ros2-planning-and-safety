@@ -21,6 +21,8 @@ The current milestone includes:
 - LiDAR-based safety supervision through `/cmd_vel`;
 - physics-informed stopping distance, clearance hysteresis, and recovery turning;
 - Python unit tests, C++ tests, and GitHub Actions CI.
+- an offline planner-scaling benchmark for map-size, density, and heuristic sweeps;
+- a read-only ROS2 evaluation logger for closed-loop metrics;
 
 The robot has been tested in simulation from the start position to the goal at
 approximately `(2.0, 0.0)`, with a final position error within the configured
@@ -53,6 +55,11 @@ conda activate robotics-portfolio
 
 python -m robotics_planning.demo
 python -m unittest discover -s tests -v
+
+python tools/planner_scaling_benchmark.py \
+  --sizes 20,50 \
+  --densities 0,0.1 \
+  --seed-count 2
 ```
 
 ### C++ planning core
@@ -88,6 +95,13 @@ python3 tools/scan_debug.py
 
 `scan_debug.py` only reads `/scan` and reports minimum front, left, and right
 sector distances. It does not publish commands or modify the simulation.
+
+To save one closed-loop evaluation row when the simulation is stopped:
+
+```bash
+ros2 launch robotics_sim sim.launch.py \
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/closed_loop_metrics.csv
+```
 
 ## Repository layout
 

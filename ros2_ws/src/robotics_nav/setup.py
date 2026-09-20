@@ -28,6 +28,7 @@ setup(
             "safety_supervisor = robotics_nav.safety_supervisor:main",
             "static_map_publisher = robotics_nav.static_map_publisher:main",
             "global_planner = robotics_nav.global_planner:main",
+            "evaluation_logger = robotics_nav.evaluation_logger:main",
         ],
     },
 )

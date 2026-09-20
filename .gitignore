@@ -5,6 +5,7 @@ cpp/build/
 cpp/build-*/
 .conda/
 .tmp/
+results/
 __pycache__/
 *.py[cod]
 *.egg-info/

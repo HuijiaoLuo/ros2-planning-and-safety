@@ -421,6 +421,88 @@ The first validation questions are:
 
 Only after these answers are positive should we tune gains or add a planner.
 
+### Planner scaling benchmark
+
+The offline benchmark in `tools/planner_scaling_benchmark.py` evaluates the
+planning layer independently from ROS2 and Gazebo. Every planner receives the
+same generated grid, start cell, goal cell, obstacle density, and random seed.
+The CSV output records:
+
+- success or failure;
+- path cost and path length;
+- expanded nodes;
+- planning runtime;
+- grid size, obstacle density, and heuristic label.
+
+The default suite includes DFS backtracking, BFS, Dijkstra, Greedy
+Best-First, A* with `h=0`, A* with Manhattan distance, A* with a
+goal-directed Manhattan tie-break, and A* with Euclidean distance. The `h=0`
+A* case is included explicitly to compare it with Dijkstra. On a four-neighbor
+unit-cost grid, Manhattan distance is the more informative admissible
+heuristic, while Euclidean distance is also admissible but generally less
+informative.
+
+The goal-directed variant orders equal `f(n)` nodes by smaller `h(n)`, using
+the tuple `(f(n), h(n), counter)`.
+This does not change the optimality condition because it only changes the
+ordering among nodes with equal `f(n)`, but it can substantially reduce
+expanded nodes on open grids.
+
+Run a small smoke benchmark with:
+
+~~~bash
+python tools/planner_scaling_benchmark.py \
+  --sizes 20,50 \
+  --densities 0,0.1 \
+  --seed-count 2 \
+  --output results/planner_smoke.csv
+~~~
+
+The full default sweep uses grid sizes `20,50,100,200`, obstacle densities
+`0,0.1,0.2,0.3`, and three seeds. Generated CSV files are ignored by Git so
+that experiment outputs can be regenerated rather than silently becoming part
+of the source baseline.
+
+### Closed-loop evaluation logger
+
+`evaluation_logger` is a read-only ROS2 node. It subscribes to `/odom`,
+`/plan`, `/scan`, `/cmd_vel_raw`, and `/safety_override`, and samples the run
+at a fixed rate. It measures:
+
+- start and goal positions;
+- final position error and goal success;
+- elapsed time and time-to-goal;
+- initial/latest planned path length and replan count;
+- travelled distance;
+- minimum front-sector clearance;
+- safety override count, override time, and override ratio.
+
+The logger subscribes to the supervisor's explicit `/safety_override` Boolean
+status for these override metrics. It does not infer overrides by comparing
+the latest `/cmd_vel_raw` and `/cmd_vel` messages, because `Twist` messages do
+not contain timestamps and asynchronous callbacks can otherwise create false
+override events.
+
+Collision is reported as `unknown` unless a Boolean message is available on
+the optional `/collision` topic. This avoids presenting a clearance estimate
+as a collision detector. The logger never publishes velocity commands.
+
+The logger is included in the default simulation launch. To print the summary
+only:
+
+~~~bash
+ros2 launch robotics_sim sim.launch.py
+~~~
+
+To additionally write one CSV row when the launch is stopped:
+
+~~~bash
+ros2 launch robotics_sim sim.launch.py \
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/closed_loop_metrics.csv
+~~~
+
+The output path is optional and the `results/` directory is ignored by Git.
+
 ## 12. Current status and roadmap
 
 The current ROS2 milestone includes:

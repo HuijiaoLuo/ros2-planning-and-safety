@@ -168,21 +168,28 @@ class GreedyBestFirstPlanner:
 class AStarPlanner:
     name = "A*"
 
-    def __init__(self, heuristic: Heuristic = manhattan) -> None:
+    def __init__(
+        self,
+        heuristic: Heuristic = manhattan,
+        prefer_goal_on_ties: bool = False,
+    ) -> None:
         self.heuristic = heuristic
+        self.prefer_goal_on_ties = prefer_goal_on_ties
 
     def plan(self, grid: GridMap, start: Cell, goal: Cell) -> SearchResult:
         _validate_endpoints(grid, start, goal)
         counter = 0
-        frontier: list[tuple[float, int, Cell, float]] = [
-            (self.heuristic(start, goal), counter, start, 0.0)
+        start_heuristic = self.heuristic(start, goal)
+        start_tie_break = start_heuristic if self.prefer_goal_on_ties else 0.0
+        frontier: list[tuple[float, float, int, Cell, float]] = [
+            (start_heuristic, start_tie_break, counter, start, 0.0)
         ]
         distances = {start: 0.0}
         parent: dict[Cell, Cell] = {}
         expanded: list[Cell] = []
 
         while frontier:
-            _, _, current, queued_cost = heapq.heappop(frontier)
+            _, _, _, current, queued_cost = heapq.heappop(frontier)
             if queued_cost != distances.get(current):
                 continue
             current_cost = distances[current]
@@ -195,16 +202,26 @@ class AStarPlanner:
                     distances[neighbor] = new_cost
                     parent[neighbor] = current
                     counter += 1
-                    priority = new_cost + self.heuristic(neighbor, goal)
+                    heuristic_value = self.heuristic(neighbor, goal)
+                    priority = new_cost + heuristic_value
+                    tie_break = (
+                        heuristic_value if self.prefer_goal_on_ties else 0.0
+                    )
                     heapq.heappush(
-                        frontier, (priority, counter, neighbor, new_cost)
+                        frontier,
+                        (priority, tie_break, counter, neighbor, new_cost),
                     )
 
         return _result(self.name, parent, start, goal, expanded, grid)
 
 
 class DFSBacktrackingPlanner:
-    """Depth-first maze solver for comparison and educational purposes."""
+    """Depth-first maze solver for comparison and educational purposes.
+
+    The implementation uses an explicit stack rather than Python recursion so
+    that scaling experiments can include larger grids without hitting the
+    interpreter recursion limit.
+    """
 
     name = "DFS backtracking"
 
@@ -214,20 +231,33 @@ class DFSBacktrackingPlanner:
         expanded: list[Cell] = []
         path: list[Cell] = []
 
-        def visit(current: Cell) -> bool:
-            visited.add(current)
-            expanded.append(current)
-            path.append(current)
-            if current == goal:
-                return True
-            for neighbor in grid.neighbors(current):
-                if neighbor not in visited and visit(neighbor):
-                    return True
-            path.pop()
-            return False
+        visited.add(start)
+        expanded.append(start)
+        path.append(start)
+        stack: list[tuple[Cell, tuple[Cell, ...], int]] = [
+            (start, grid.neighbors(start), 0)
+        ]
 
-        found = visit(start)
-        if not found:
+        while stack:
+            current, neighbors, next_index = stack[-1]
+            if current == goal:
+                break
+            if next_index >= len(neighbors):
+                stack.pop()
+                path.pop()
+                continue
+
+            stack[-1] = (current, neighbors, next_index + 1)
+            neighbor = neighbors[next_index]
+            if neighbor in visited:
+                continue
+
+            visited.add(neighbor)
+            expanded.append(neighbor)
+            path.append(neighbor)
+            stack.append((neighbor, grid.neighbors(neighbor), 0))
+
+        if not stack or not path or path[-1] != goal:
             return SearchResult(self.name, None, tuple(expanded), None)
         cost = sum(grid.cost_to_enter(cell) for cell in path[1:])
         return SearchResult(self.name, tuple(path), tuple(expanded), cost)

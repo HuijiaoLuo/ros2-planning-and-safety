@@ -47,6 +47,15 @@ class PlannerTests(unittest.TestCase):
         astar = AStarPlanner().plan(self.grid, self.start, self.goal)
         self.assertLessEqual(len(astar.expanded), len(dijkstra.expanded))
 
+    def test_astar_goal_tie_break_preserves_cost_and_reduces_open_grid_search(self) -> None:
+        grid = GridMap(width=10, height=10)
+        baseline = AStarPlanner().plan(grid, (0, 0), (9, 9))
+        goal_directed = AStarPlanner(prefer_goal_on_ties=True).plan(
+            grid, (0, 0), (9, 9)
+        )
+        self.assertEqual(goal_directed.cost, baseline.cost)
+        self.assertLess(len(goal_directed.expanded), len(baseline.expanded))
+
     def test_unreachable_goal_returns_no_path(self) -> None:
         grid, start, goal = parse_ascii_map(
             """

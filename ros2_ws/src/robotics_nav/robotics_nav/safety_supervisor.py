@@ -10,6 +10,7 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Bool
 
 
 class SafetySupervisor(Node):
@@ -64,6 +65,11 @@ class SafetySupervisor(Node):
         publish_rate = float(self.get_parameter("publish_rate_hz").value)
 
         self.publisher = self.create_publisher(Twist, "/cmd_vel", 10)
+        self.override_publisher = self.create_publisher(
+            Bool,
+            "/safety_override",
+            10,
+        )
         self.raw_subscription = self.create_subscription(
             Twist,
             "/cmd_vel_raw",
@@ -94,6 +100,11 @@ class SafetySupervisor(Node):
 
     def publish_stop(self) -> None:
         self.publisher.publish(Twist())
+
+    def publish_override_state(self, active: bool) -> None:
+        message = Bool()
+        message.data = active
+        self.override_publisher.publish(message)
 
     def raw_callback(self, message: Twist) -> None:
         self.latest_raw_command = message
@@ -197,6 +208,7 @@ class SafetySupervisor(Node):
 
         if self.latest_scan is None:
             self.publisher.publish(Twist())
+            self.publish_override_state(True)
             if not self.was_blocked:
                 self.get_logger().warn("No LiDAR scan received; holding robot stopped.")
             self.was_blocked = True
@@ -205,6 +217,7 @@ class SafetySupervisor(Node):
         tilt = self.roll_pitch()
         if tilt is None:
             self.publisher.publish(Twist())
+            self.publish_override_state(True)
             if not self.tilt_stop_active:
                 self.get_logger().warn("No /odom pose received; holding robot stopped.")
             self.tilt_stop_active = True
@@ -213,6 +226,7 @@ class SafetySupervisor(Node):
         roll, pitch = tilt
         if max(abs(roll), abs(pitch)) > self.max_tilt:
             self.publisher.publish(Twist())
+            self.publish_override_state(True)
             if not self.tilt_stop_active:
                 self.get_logger().error(
                     "Tilt safety stop: "
@@ -258,6 +272,7 @@ class SafetySupervisor(Node):
             safe_command = Twist()
             safe_command.angular.z = self.recovery_turn
             self.publisher.publish(safe_command)
+            self.publish_override_state(True)
             if not self.was_blocked:
                 self.intervention_count += 1
                 observed = "unknown" if distance is None else f"{distance:.3f} m"
@@ -270,6 +285,7 @@ class SafetySupervisor(Node):
         else:
             self.recovery_turn = 0.0
             self.publisher.publish(raw)
+            self.publish_override_state(False)
 
         self.was_blocked = blocked
 
