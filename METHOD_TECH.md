@@ -519,9 +519,9 @@ misleading value greater than one.
 The CSV also reports `path_length_ratio`, defined as
 
 $$
-\text{path\_length\_ratio}
+\mathrm{path\_length\_ratio}
 =
-\frac{L_{\text{travelled}}}{L_{\text{planned}}}
+\frac{L_{\mathrm{travelled}}}{L_{\mathrm{planned}}}
 $$
 
 The initial planned path is a grid polyline, while the executed trajectory is
