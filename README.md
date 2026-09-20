@@ -15,6 +15,8 @@ The central question is:
 
 <p align="center"><em>Baseline run: A* path planning, closed-loop path following, and LiDAR-aware safety supervision.</em></p>
 
+<p align="center"><sub>Gray: occupied cells · dashed blue: A* path · red: executed trajectory · cyan: robot · orange: goal. The overlay reports time, front clearance, and safety override state.</sub></p>
+
 ## Current status
 
 The current milestone includes:

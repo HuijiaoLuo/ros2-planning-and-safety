@@ -262,6 +262,33 @@ The terms represent:
 - tau: sensing and command latency;
 - d_margin: additional uncertainty margin.
 
+### Front clearance
+
+`front clearance` is the closest valid LiDAR return in the robot's forward
+sector at one instant. The current supervisor uses rays within `±60°` of the
+robot's forward axis:
+
+$$
+d_{\mathrm{front}}(t)
+=
+\min_{\lvert \alpha_i \rvert \le 60^\circ} r_i(t)
+$$
+
+Here, `r_i` is a LiDAR range measurement and `alpha_i` is its angle relative
+to the robot. This is a sensor-origin distance, not an exact distance from the
+robot's outer body to the obstacle.
+
+The terminology in the evaluation CSV is:
+
+- `front clearance`: the instantaneous value used by the safety decision;
+- `minimum_clearance`: the configured lower-bound threshold;
+- `minimum_clearance_m`: the smallest instantaneous front clearance observed
+  during the complete run.
+
+For example, with `minimum_clearance=0.55 m`, a measured front clearance of
+`0.537 m` triggers the supervisor, while `0.633 m` does not. The dynamic
+stopping envelope can still require a larger value at higher speed.
+
 The current decision rule is conservative:
 
 ~~~
