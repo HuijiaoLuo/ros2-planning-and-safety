@@ -5,6 +5,10 @@ from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
+    evaluation_output = LaunchConfiguration("evaluation_output")
+    trace_output = LaunchConfiguration("trace_output")
+    plan_output = LaunchConfiguration("plan_output")
+    map_output = LaunchConfiguration("map_output")
     minimum_clearance = LaunchConfiguration("minimum_clearance")
     sensor_latency = LaunchConfiguration("sensor_latency")
     safety_margin = LaunchConfiguration("safety_margin")
@@ -17,6 +21,21 @@ def generate_launch_description():
                 "evaluation_output",
                 default_value="",
                 description="Optional CSV path for closed-loop evaluation metrics.",
+            ),
+            DeclareLaunchArgument(
+                "trace_output",
+                default_value="",
+                description="Optional CSV path for per-sample trajectory trace.",
+            ),
+            DeclareLaunchArgument(
+                "plan_output",
+                default_value="",
+                description="Optional CSV path for the final planned path.",
+            ),
+            DeclareLaunchArgument(
+                "map_output",
+                default_value="",
+                description="Optional CSV path for occupied map cells.",
             ),
             DeclareLaunchArgument(
                 "collision_topic",
@@ -117,7 +136,10 @@ def generate_launch_description():
                         "goal_tolerance": 0.05,
                         "front_angle_deg": 60.0,
                         "sample_rate_hz": 20.0,
-                        "output_path": LaunchConfiguration("evaluation_output"),
+                        "output_path": evaluation_output,
+                        "trace_output": trace_output,
+                        "plan_output": plan_output,
+                        "map_output": map_output,
                         "collision_topic": LaunchConfiguration("collision_topic"),
                         "minimum_clearance": minimum_clearance,
                         "sensor_latency": sensor_latency,

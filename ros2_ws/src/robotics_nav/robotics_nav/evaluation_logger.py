@@ -11,7 +11,7 @@ from typing import Optional
 
 import rclpy
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry, Path as NavPath
+from nav_msgs.msg import OccupancyGrid, Odometry, Path as NavPath
 from rclpy.node import Node
 from rclpy.qos import (
     DurabilityPolicy,
@@ -39,6 +39,9 @@ class EvaluationLogger(Node):
         self.declare_parameter("front_angle_deg", 60.0)
         self.declare_parameter("sample_rate_hz", 20.0)
         self.declare_parameter("output_path", "")
+        self.declare_parameter("trace_output", "")
+        self.declare_parameter("plan_output", "")
+        self.declare_parameter("map_output", "")
         self.declare_parameter("collision_topic", "/collision/contacts")
         self.declare_parameter("safety_override_topic", "/safety_override")
         self.declare_parameter("minimum_clearance", 0.50)
@@ -52,6 +55,9 @@ class EvaluationLogger(Node):
         )
         sample_rate = float(self.get_parameter("sample_rate_hz").value)
         self.output_path = str(self.get_parameter("output_path").value)
+        self.trace_output = str(self.get_parameter("trace_output").value)
+        self.plan_output = str(self.get_parameter("plan_output").value)
+        self.map_output = str(self.get_parameter("map_output").value)
         self.collision_topic = str(self.get_parameter("collision_topic").value)
         self.configured_minimum_clearance = float(
             self.get_parameter("minimum_clearance").value
@@ -71,6 +77,8 @@ class EvaluationLogger(Node):
 
         self.latest_odom: Optional[Odometry] = None
         self.latest_plan: Optional[NavPath] = None
+        self.initial_plan: Optional[NavPath] = None
+        self.latest_map: Optional[OccupancyGrid] = None
         self.latest_scan: Optional[LaserScan] = None
         self.latest_raw_command: Optional[Twist] = None
         self.latest_override_state: Optional[bool] = None
@@ -96,6 +104,7 @@ class EvaluationLogger(Node):
         self.safety_override_time = 0.0
         self.override_active = False
         self.sample_count = 0
+        self.trace_rows: list[dict[str, object]] = []
 
         path_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -110,6 +119,7 @@ class EvaluationLogger(Node):
             qos_profile_sensor_data,
         )
         self.create_subscription(NavPath, "/plan", self.plan_callback, path_qos)
+        self.create_subscription(OccupancyGrid, "/map", self.map_callback, path_qos)
         self.create_subscription(
             LaserScan,
             "/scan",
@@ -145,6 +155,9 @@ class EvaluationLogger(Node):
         if not message.poses:
             return
 
+        if self.initial_plan is None:
+            self.initial_plan = message
+
         points = [
             (pose.pose.position.x, pose.pose.position.y)
             for pose in message.poses
@@ -158,6 +171,9 @@ class EvaluationLogger(Node):
             self.initial_planned_path_length = path_length
         self.latest_planned_path_length = path_length
 
+    def map_callback(self, message: OccupancyGrid) -> None:
+        self.latest_map = message
+
     def scan_callback(self, message: LaserScan) -> None:
         self.latest_scan = message
 
@@ -169,6 +185,12 @@ class EvaluationLogger(Node):
 
     def collision_callback(self, message: Contacts) -> None:
         self.collision_state = bool(message.contacts)
+
+    @staticmethod
+    def yaw_from_quaternion(orientation) -> float:
+        sin_yaw = 2.0 * (orientation.w * orientation.z + orientation.x * orientation.y)
+        cos_yaw = 1.0 - 2.0 * (orientation.y * orientation.y + orientation.z * orientation.z)
+        return math.atan2(sin_yaw, cos_yaw)
 
     def front_clearance(self, scan: LaserScan) -> Optional[float]:
         if scan.angle_increment == 0.0:
@@ -215,6 +237,7 @@ class EvaluationLogger(Node):
             )
         self.last_x, self.last_y = current_x, current_y
 
+        clearance: Optional[float] = None
         if self.latest_scan is not None:
             clearance = self.front_clearance(self.latest_scan)
             if clearance is not None:
@@ -258,6 +281,30 @@ class EvaluationLogger(Node):
             )
             if goal_distance <= self.goal_tolerance and self.goal_reached_at is None:
                 self.goal_reached_at = now
+
+        raw_linear_x = (
+            None if self.latest_raw_command is None else self.latest_raw_command.linear.x
+        )
+        raw_angular_z = (
+            None if self.latest_raw_command is None else self.latest_raw_command.angular.z
+        )
+        self.trace_rows.append(
+            {
+                "time_s": now - self.started_at,
+                "x_m": current_x,
+                "y_m": current_y,
+                "yaw_rad": self.yaw_from_quaternion(
+                    self.latest_odom.pose.pose.orientation
+                ),
+                "goal_x_m": self.goal_x,
+                "goal_y_m": self.goal_y,
+                "raw_linear_x_mps": raw_linear_x,
+                "raw_angular_z_radps": raw_angular_z,
+                "front_clearance_m": clearance,
+                "safety_override": self.latest_override_state,
+                "collision": self.collision_state,
+            }
+        )
 
         self.last_sample_time = now
         self.sample_count += 1
@@ -342,16 +389,79 @@ class EvaluationLogger(Node):
         for key, value in metrics.items():
             print(f"{key}: {value}")
 
-        if not self.output_path:
-            return
+        if self.output_path:
+            output = Path(self.output_path)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            with output.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(metrics))
+                writer.writeheader()
+                writer.writerow(metrics)
+            print(f"Wrote evaluation metrics to {output}")
 
-        output = Path(self.output_path)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        with output.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(metrics))
-            writer.writeheader()
-            writer.writerow(metrics)
-        print(f"Wrote evaluation metrics to {output}")
+        if self.trace_output:
+            trace_path = Path(self.trace_output)
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+            trace_fields = [
+                "time_s",
+                "x_m",
+                "y_m",
+                "yaw_rad",
+                "goal_x_m",
+                "goal_y_m",
+                "raw_linear_x_mps",
+                "raw_angular_z_radps",
+                "front_clearance_m",
+                "safety_override",
+                "collision",
+            ]
+            with trace_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=trace_fields)
+                writer.writeheader()
+                writer.writerows(self.trace_rows)
+            print(f"Wrote evaluation trace to {trace_path}")
+
+        plan_message = self.initial_plan or self.latest_plan
+        if self.plan_output and plan_message is not None:
+            plan_path = Path(self.plan_output)
+            plan_path.parent.mkdir(parents=True, exist_ok=True)
+            with plan_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["index", "x_m", "y_m"])
+                writer.writeheader()
+                for index, pose in enumerate(plan_message.poses):
+                    writer.writerow(
+                        {
+                            "index": index,
+                            "x_m": pose.pose.position.x,
+                            "y_m": pose.pose.position.y,
+                        }
+                    )
+            print(f"Wrote evaluation plan to {plan_path}")
+
+        if self.map_output and self.latest_map is not None:
+            map_path = Path(self.map_output)
+            map_path.parent.mkdir(parents=True, exist_ok=True)
+            with map_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["x_m", "y_m", "occupancy", "resolution_m"],
+                )
+                writer.writeheader()
+                for row in range(self.latest_map.info.height):
+                    for column in range(self.latest_map.info.width):
+                        index = row * self.latest_map.info.width + column
+                        if self.latest_map.data[index] < 50:
+                            continue
+                        writer.writerow(
+                            {
+                                "x_m": self.latest_map.info.origin.position.x
+                                + (column + 0.5) * self.latest_map.info.resolution,
+                                "y_m": self.latest_map.info.origin.position.y
+                                + (row + 0.5) * self.latest_map.info.resolution,
+                                "occupancy": self.latest_map.data[index],
+                                "resolution_m": self.latest_map.info.resolution,
+                            }
+                        )
+            print(f"Wrote evaluation map to {map_path}")
 
 
 def main(args=None) -> None:

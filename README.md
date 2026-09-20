@@ -96,6 +96,16 @@ python3 tools/scan_debug.py
 `scan_debug.py` only reads `/scan` and reports minimum front, left, and right
 sector distances. It does not publish commands or modify the simulation.
 
+To render a baseline navigation GIF from the optional CSV trace:
+
+```bash
+python tools/render_baseline_gif.py \
+  --trace results/baseline_trace.csv \
+  --plan results/baseline_plan.csv \
+  --map results/baseline_map.csv \
+  --output docs/assets/baseline_navigation.gif
+```
+
 To save one closed-loop evaluation row when the simulation is stopped:
 
 ```bash

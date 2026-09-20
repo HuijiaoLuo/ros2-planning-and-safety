@@ -14,6 +14,9 @@ def generate_launch_description():
     world_path = os.path.join(sim_share, "worlds", "differential_drive.sdf")
     nav_launch_path = os.path.join(nav_share, "launch", "bringup.launch.py")
     evaluation_output = LaunchConfiguration("evaluation_output")
+    trace_output = LaunchConfiguration("trace_output")
+    plan_output = LaunchConfiguration("plan_output")
+    map_output = LaunchConfiguration("map_output")
     collision_topic = LaunchConfiguration("collision_topic")
     minimum_clearance = LaunchConfiguration("minimum_clearance")
     sensor_latency = LaunchConfiguration("sensor_latency")
@@ -27,6 +30,21 @@ def generate_launch_description():
                 "evaluation_output",
                 default_value="",
                 description="Optional CSV path for closed-loop evaluation metrics.",
+            ),
+            DeclareLaunchArgument(
+                "trace_output",
+                default_value="",
+                description="Optional CSV path for per-sample trajectory trace.",
+            ),
+            DeclareLaunchArgument(
+                "plan_output",
+                default_value="",
+                description="Optional CSV path for the final planned path.",
+            ),
+            DeclareLaunchArgument(
+                "map_output",
+                default_value="",
+                description="Optional CSV path for occupied map cells.",
             ),
             DeclareLaunchArgument(
                 "collision_topic",
@@ -79,6 +97,9 @@ def generate_launch_description():
                 PythonLaunchDescriptionSource(nav_launch_path),
                 launch_arguments={
                     "evaluation_output": evaluation_output,
+                    "trace_output": trace_output,
+                    "plan_output": plan_output,
+                    "map_output": map_output,
                     "collision_topic": collision_topic,
                     "minimum_clearance": minimum_clearance,
                     "sensor_latency": sensor_latency,

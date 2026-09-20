@@ -511,6 +511,21 @@ ros2 launch robotics_sim sim.launch.py \
 
 The output path is optional and the `results/` directory is ignored by Git.
 
+For a replay or GIF, the logger can additionally save the per-sample trajectory,
+the first non-empty planned path, and the occupied map cells:
+
+```bash
+ros2 launch robotics_sim sim.launch.py \
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/baseline_metrics.csv \
+  trace_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/baseline_trace.csv \
+  plan_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/baseline_plan.csv \
+  map_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/baseline_map.csv
+```
+
+These outputs are optional diagnostic artifacts. The trace records odometry,
+heading, raw velocity commands, forward LiDAR clearance, and the safety
+override state; it does not publish commands or alter the controller.
+
 `path_efficiency` is reported only for successful runs. For an incomplete
 run, the robot has not traversed the full planned route, so dividing the
 initial full-path length by partial travelled distance would produce a
