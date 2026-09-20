@@ -586,6 +586,7 @@ The comparison results are:
 | Baseline | 0.50 m | 0.35 m | yes | 67.74 | 3.783 | 0.520 | 0.000 | false |
 | Mismatched constraints | 0.55 m | 0.35 m | no | -- | 0.536 | 0.538 | 0.658 | false |
 | Cell-boundary test | 0.55 m | 0.40 m | no | -- | 0.497 | 0.537 | 0.688 | false |
+| First feasible boundary | 0.55 m | 0.41 m | yes | 70.32 | 3.981 | 0.633 | 0.000 | false |
 | Intermediate alignment | 0.55 m | 0.45 m | yes | 68.64 | 3.983 | 0.634 | 0.000 | false |
 | Aligned constraints | 0.55 m | 0.55 m | yes | 73.66 | 4.195 | 0.735 | 0.000 | false |
 
