@@ -327,6 +327,13 @@ def main(args=None) -> None:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
+    except RuntimeError:
+        # During Ctrl+C, the executor can race with DDS entity teardown while
+        # taking a subscription message. Do not hide a live-node failure: only
+        # suppress this exception when the ROS context is already shutting
+        # down.
+        if rclpy.ok():
+            raise
     finally:
         if rclpy.ok():
             node.publish_stop()

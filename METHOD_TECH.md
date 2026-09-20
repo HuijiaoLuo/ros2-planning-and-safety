@@ -682,6 +682,50 @@ occupancy-grid resolution: obstacle inflation is converted to an integer
 number of grid cells, so a small change in the continuous parameter may have
 no effect until it crosses the next cell boundary.
 
+### Stopping-envelope stress test
+
+A second experiment kept the baseline planner radius at `0.35 m` but increased
+the safety margin from `0.15 m` to `0.55 m`:
+
+| Case | `safety_margin` | `planning_radius_m` | `success` | `travelled_distance_m` | `minimum_clearance_m` | `safety_override_time_s` | `safety_override_ratio` | `collision` |
+| --- | ---: | ---: | :---: | ---: | ---: | ---: | ---: | :--- |
+| Baseline margin | 0.15 m | 0.35 m | yes | 3.783 | 0.520 | 0.000 | 0.000 | false |
+| High-margin stress | 0.55 m | 0.35 m | no | 0.390 | 0.550 | 28.465 | 0.482 | false |
+| Minimum tested feasible radius | 0.55 m | 0.41 m | yes | 3.979 | 0.633 | 0.000 | 0.000 | false |
+| High-margin aligned | 0.55 m | 0.60 m | yes | 4.200 | 0.733 | 0.000 | 0.000 | false |
+
+The high-margin run was stopped by the safety supervisor before reaching the
+goal. This demonstrates that a planner using only footprint inflation can
+still produce a route that is infeasible under a more conservative dynamic
+stopping envelope. The robot remained collision-free, but spent much of the
+run in safety recovery because the current supervisor does not replan from
+its stopping-envelope constraint. With `planning_radius_m=0.60`, the measured
+clearance exceeded the approximately `0.595 m` stopping requirement and the
+run completed without a safety override.
+
+### Sensor-latency parameter comparison
+
+The `sensor_latency` parameter is used in the stopping-envelope model as the
+time available for sensing, command transport, and actuation before braking
+starts. It is therefore a modelled latency term; this experiment does not
+inject an actual delay into ROS messages or Gazebo sensor delivery.
+
+Both runs below use `minimum_clearance=0.50 m`,
+`safety_margin=0.55 m`, and `planning_radius_m=0.41 m`:
+
+| Case | `sensor_latency` | `success` | `time_to_goal_s` | `travelled_distance_m` | `minimum_clearance_m` | `safety_override_ratio` | `collision` |
+| --- | ---: | :---: | ---: | ---: | ---: | ---: | :---: |
+| Latency 0.10 s | 0.10 s | yes | 70.48 | 3.979 | 0.633 | 0.000 | false |
+| Latency 0.30 s | 0.30 s | yes | 69.75 | 3.979 | 0.633 | 0.000 | false |
+
+In this deterministic world, increasing the modelled latency from `0.10 s` to
+`0.30 s` did not trigger a safety override because the executed route retained
+enough clearance. The result should not be interpreted as proof that real
+sensor or network latency has no effect: a tighter route, higher speed, noisy
+LiDAR, or actuator delay could make the additional stopping distance active.
+The experiment shows that latency must be evaluated together with obstacle
+inflation, speed limits, and safety margin rather than as an isolated number.
+
 ## 12. Current status and roadmap
 
 The current ROS2 milestone includes:
