@@ -264,9 +264,30 @@ The terms represent:
 
 ### Front clearance
 
-`front clearance` is the closest valid LiDAR return in the robot's forward
-sector at one instant. The current supervisor uses rays within `±60°` of the
-robot's forward axis:
+`front clearance` is not a distance read from the map. It is a measurement
+made by the simulated LiDAR at one instant. The measurement pipeline is:
+
+```text
+Gazebo ray casting
+        ↓
+sensor_msgs/LaserScan.ranges
+        ↓
+keep valid rays within the forward sector
+        ↓
+take the shortest remaining range
+        ↓
+front clearance used by the safety supervisor
+```
+
+The LiDAR is expressed in the robot's local `base_link` frame. A scan contains
+one range value for each ray angle:
+
+$$
+\alpha_i = \alpha_{\min} + i\,\Delta\alpha
+$$
+
+The supervisor keeps rays within `±60°` of the robot's forward axis and takes
+the closest valid return:
 
 $$
 d_{\mathrm{front}}(t)
@@ -274,9 +295,27 @@ d_{\mathrm{front}}(t)
 \min_{\lvert \alpha_i \rvert \le 60^\circ} r_i(t)
 $$
 
-Here, `r_i` is a LiDAR range measurement and `alpha_i` is its angle relative
-to the robot. This is a sensor-origin distance, not an exact distance from the
-robot's outer body to the obstacle.
+Here, `r_i` is the distance from the LiDAR origin to the first surface hit by
+ray `i`, and `alpha_i` is the ray's angle relative to the robot. It is therefore
+not automatically the distance from the robot's outer body to the obstacle.
+
+In the current Gazebo model, the LiDAR is centered in the robot footprint and
+the base collision box has dimensions `0.50 m × 0.36 m`. For a flat wall
+directly ahead, the front face is approximately `0.25 m` in front of the
+LiDAR origin, so the body-face gap would be roughly:
+
+```text
+body-face gap ≈ front clearance - 0.25 m
+```
+
+That approximation does not hold exactly for a corner, an angled surface, or
+an obstacle seen by an off-axis ray. This is why the project reports the
+sensor measurement explicitly as `minimum_clearance_m` instead of calling it
+the robot's exact geometric clearance.
+
+The current sensor has 360 horizontal rays over 360 degrees, a usable range
+from `0.12 m` to `10.0 m`, and the safety supervisor only uses the forward
+`±60°` subset for the stop decision.
 
 The terminology in the evaluation CSV is:
 
