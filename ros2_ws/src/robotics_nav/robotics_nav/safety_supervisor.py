@@ -2,6 +2,7 @@
 """Velocity safety layer based on a LiDAR stopping-distance envelope."""
 
 import math
+import random
 import time
 from collections import deque
 from typing import Optional
@@ -24,6 +25,8 @@ class SafetySupervisor(Node):
         self.declare_parameter("max_deceleration", 0.8)
         self.declare_parameter("sensor_latency", 0.10)
         self.declare_parameter("scan_delay_s", 0.0)
+        self.declare_parameter("scan_noise_std_m", 0.0)
+        self.declare_parameter("scan_noise_seed", 0)
         self.declare_parameter("safety_margin", 0.15)
         # Keep additional clearance beyond the planner's footprint inflation.
         # The speed-dependent envelope can still impose a larger distance
@@ -45,6 +48,13 @@ class SafetySupervisor(Node):
         self.max_deceleration = float(self.get_parameter("max_deceleration").value)
         self.sensor_latency = float(self.get_parameter("sensor_latency").value)
         self.scan_delay = max(0.0, float(self.get_parameter("scan_delay_s").value))
+        self.scan_noise_std = max(
+            0.0, float(self.get_parameter("scan_noise_std_m").value)
+        )
+        self.scan_noise_seed = int(
+            float(self.get_parameter("scan_noise_seed").value)
+        )
+        self.scan_noise_rng = random.Random(self.scan_noise_seed)
         self.safety_margin = float(self.get_parameter("safety_margin").value)
         self.minimum_clearance = float(
             self.get_parameter("minimum_clearance").value
@@ -109,6 +119,14 @@ class SafetySupervisor(Node):
         self.recovery_timeout_active = False
         self.tilt_stop_active = False
 
+        if self.scan_delay > 0.0 or self.scan_noise_std > 0.0:
+            self.get_logger().info(
+                "LiDAR experiment: "
+                f"scan_delay={self.scan_delay:.3f} s, "
+                f"noise_std={self.scan_noise_std:.3f} m, "
+                f"seed={self.scan_noise_seed}."
+            )
+
     def publish_stop(self) -> None:
         self.publisher.publish(Twist())
 
@@ -122,7 +140,7 @@ class SafetySupervisor(Node):
 
     def scan_callback(self, message: LaserScan) -> None:
         received_at = time.monotonic()
-        self.scan_buffer.append((received_at, message))
+        self.scan_buffer.append((received_at, self.noisy_scan(message)))
 
         # Keep only the small history needed to select a delayed scan. The
         # timer callback removes entries that are older than the selected one.
@@ -131,6 +149,37 @@ class SafetySupervisor(Node):
             if second_time > received_at - self.scan_delay:
                 break
             self.scan_buffer.popleft()
+
+    def noisy_scan(self, message: LaserScan) -> LaserScan:
+        """Return one scan with reproducible Gaussian range noise applied."""
+        if self.scan_noise_std <= 0.0:
+            return message
+
+        noisy_message = LaserScan()
+        noisy_message.header = message.header
+        noisy_message.angle_min = message.angle_min
+        noisy_message.angle_max = message.angle_max
+        noisy_message.angle_increment = message.angle_increment
+        noisy_message.time_increment = message.time_increment
+        noisy_message.scan_time = message.scan_time
+        noisy_message.range_min = message.range_min
+        noisy_message.range_max = message.range_max
+        noisy_ranges = list(message.ranges)
+        for index, value in enumerate(noisy_ranges):
+            if not math.isfinite(value):
+                continue
+            if value < message.range_min or value > message.range_max:
+                continue
+            noisy_ranges[index] = max(
+                message.range_min,
+                min(
+                    message.range_max,
+                    value + self.scan_noise_rng.gauss(0.0, self.scan_noise_std),
+                ),
+            )
+        noisy_message.ranges = noisy_ranges
+        noisy_message.intensities = list(message.intensities)
+        return noisy_message
 
     def update_delayed_scan(self) -> None:
         """Expose a scan that is at least ``scan_delay_s`` old.

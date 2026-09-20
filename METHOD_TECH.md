@@ -620,6 +620,8 @@ ros2 launch robotics_sim sim.launch.py \
   minimum_clearance:=0.50 \
   sensor_latency:=0.10 \
   scan_delay_s:=0.00 \
+  scan_noise_std_m:=0.00 \
+  scan_noise_seed:=0 \
   safety_margin:=0.15 \
   recovery_timeout_s:=8.0 \
   planning_radius_m:=0.35 \
@@ -635,6 +637,12 @@ use an older received `/scan` message. The delay is measured from message
 arrival time, so it remains meaningful when ROS simulation time is enabled.
 The default `scan_delay_s=0.0` uses the newest available scan and preserves the
 baseline behaviour.
+
+`scan_noise_std_m` adds zero-mean Gaussian noise to finite LiDAR ranges before
+the safety supervisor evaluates them. `scan_noise_seed` makes the generated
+noise reproducible. The evaluator continues to measure clearance from the
+unmodified `/scan` topic, so the CSV separates physical clearance from the
+noisy observation used by the safety layer.
 
 `planning_radius_m` controls the global planner's grid obstacle inflation.
 The default `0.35 m` represents the robot footprint plus discretization
@@ -734,10 +742,90 @@ LiDAR, or actuator delay could make the additional stopping distance active.
 The experiment shows that latency must be evaluated together with obstacle
 inflation, speed limits, and safety margin rather than as an isolated number.
 
-The next experiment should hold `sensor_latency` fixed and sweep only
-`scan_delay_s`, for example `0.00`, `0.10`, `0.20`, and `0.30 s`. That isolates
-the effect of stale sensor data from the effect of a more conservative braking
-assumption.
+### Real LiDAR-delay sweep
+
+The following sweep holds `sensor_latency=0.10 s`,
+`safety_margin=0.15 m`, `minimum_clearance=0.50 m`, and
+`planning_radius_m=0.35 m` fixed. Only the age of the LiDAR scan used by the
+safety supervisor changes:
+
+| `scan_delay_s` | `success` | `time_to_goal_s` | `minimum_clearance_m` | `safety_override_count` | `safety_override_time_s` | `safety_override_ratio` | `collision` |
+| ---: | :---: | ---: | ---: | ---: | ---: | ---: | :---: |
+| 0.00 s | yes | 65.95 | 0.520 | 1 | 0.000 | 0.0000 | false |
+| 0.10 s | yes | 68.22 | 0.518 | 1 | 0.050 | 0.0007 | false |
+| 0.20 s | yes | 66.37 | 0.519 | 1 | 0.150 | 0.0023 | false |
+| 0.30 s | yes | 67.58 | 0.518 | 1 | 0.250 | 0.0037 | false |
+
+All four runs reached the goal without collision. The time-to-goal variation
+is not monotonic because it also includes controller and simulator timing
+variation. The clearer trend is the longer safety-intervention duration as
+the supervisor operates on increasingly stale scans. Here
+`safety_override_count` counts distinct blocked episodes; a count of one does
+not mean that the robot was overridden for the whole run.
+
+### LiDAR-noise experiment
+
+The next robustness sweep should hold the map, controller, safety margin, and
+scan delay fixed while varying only the LiDAR range-noise standard deviation:
+
+```bash
+ros2 launch robotics_sim sim.launch.py \
+  minimum_clearance:=0.50 \
+  sensor_latency:=0.10 \
+  scan_delay_s:=0.00 \
+  scan_noise_std_m:=0.03 \
+  scan_noise_seed:=1 \
+  safety_margin:=0.15 \
+  planning_radius_m:=0.35 \
+  recovery_timeout_s:=8.0 \
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/sweep_noise_003_seed_001.csv
+```
+
+Use several fixed seeds for each noise level, for example `0.00`, `0.01`,
+`0.03`, and `0.05 m`. This separates the effect of random measurement error
+from the deterministic effect of stale scans.
+
+The first aligned smoke test used `scan_noise_std_m=0.03 m`,
+`scan_noise_seed=1`, and `planning_radius_m=0.41 m`:
+
+| Noise standard deviation | Seed | `success` | `time_to_goal_s` | `minimum_clearance_m` | `safety_override_ratio` | `collision` |
+| ---: | ---: | :---: | ---: | ---: | ---: | :---: |
+| 0.03 m | 1 | yes | 72.23 | 0.633 | 0.000 | false |
+| 0.03 m | 2 | yes | 70.10 | 0.631 | 0.000 | false |
+| 0.03 m | 3 | yes | 70.69 | 0.633 | 0.000 | false |
+| 0.05 m | 1 | yes | 70.53 | 0.632 | 0.000 | false |
+| 0.05 m | 2 | yes | 70.04 | 0.630 | 0.005 | false |
+| 0.05 m | 3 | yes | 70.90 | 0.633 | 0.000 | false |
+
+Across these three seeds, the success rate was `3/3`, the mean time-to-goal
+was approximately `71.00 s`, and the mean measured minimum clearance was
+`0.632 m`. This is an initial robustness check rather than a statistically
+large Monte Carlo study, but it confirms that the result is not specific to a
+single noise realization.
+
+For the `0.05 m` noise level, all three seeds also succeeded. The mean
+time-to-goal was approximately `70.49 s` and the mean measured minimum
+clearance was `0.632 m`. One seed produced four short safety interventions,
+for a total intervention time of `0.350 s`; the other two seeds produced no
+intervention. This illustrates why repeated seeds are useful even when the
+success rate remains unchanged.
+
+An interaction test combined `scan_delay_s=0.30 s` with
+`scan_noise_std_m=0.05 m`, using `planning_radius_m=0.41 m` and seed `1`:
+
+| Scan delay | Noise standard deviation | `success` | `time_to_goal_s` | `minimum_clearance_m` | `safety_override_time_s` | `safety_override_ratio` | `collision` |
+| ---: | ---: | :---: | ---: | ---: | ---: | ---: | :---: |
+| 0.30 s | 0.05 m | yes | 69.15 | 0.632 | 0.250 | 0.0036 | false |
+
+The combined uncertainty still produced a successful collision-free run, but
+it triggered a short safety intervention. More seeds would be needed before
+making a statistical claim about the interaction effect.
+
+Compared with the earlier `0.35 m` planning radius, the larger radius leaves
+enough physical clearance for the noisy safety observation without causing a
+false recovery stop in this run. This is why noise experiments should first
+use a planner/safety configuration with a known clearance margin, then test
+the tighter boundary configuration separately.
 
 ## 12. Current status and roadmap
 

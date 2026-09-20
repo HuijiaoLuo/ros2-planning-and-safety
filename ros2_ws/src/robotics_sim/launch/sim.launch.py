@@ -24,6 +24,8 @@ def generate_launch_description():
     recovery_timeout_s = LaunchConfiguration("recovery_timeout_s")
     planning_radius_m = LaunchConfiguration("planning_radius_m")
     scan_delay_s = LaunchConfiguration("scan_delay_s")
+    scan_noise_std_m = LaunchConfiguration("scan_noise_std_m")
+    scan_noise_seed = LaunchConfiguration("scan_noise_seed")
 
     return LaunchDescription(
         [
@@ -68,6 +70,16 @@ def generate_launch_description():
                 description="Artificial delay before the safety supervisor uses a LiDAR scan.",
             ),
             DeclareLaunchArgument(
+                "scan_noise_std_m",
+                default_value="0.0",
+                description="Gaussian LiDAR range-noise standard deviation in metres.",
+            ),
+            DeclareLaunchArgument(
+                "scan_noise_seed",
+                default_value="0",
+                description="Random seed for reproducible LiDAR range noise.",
+            ),
+            DeclareLaunchArgument(
                 "safety_margin",
                 default_value="0.15",
                 description="Additional stopping-distance safety margin in metres.",
@@ -110,6 +122,8 @@ def generate_launch_description():
                     "minimum_clearance": minimum_clearance,
                     "sensor_latency": sensor_latency,
                     "scan_delay_s": scan_delay_s,
+                    "scan_noise_std_m": scan_noise_std_m,
+                    "scan_noise_seed": scan_noise_seed,
                     "safety_margin": safety_margin,
                     "recovery_timeout_s": recovery_timeout_s,
                     "planning_radius_m": planning_radius_m,
