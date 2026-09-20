@@ -619,6 +619,7 @@ CSV for traceability:
 ros2 launch robotics_sim sim.launch.py \
   minimum_clearance:=0.50 \
   sensor_latency:=0.10 \
+  scan_delay_s:=0.00 \
   safety_margin:=0.15 \
   recovery_timeout_s:=8.0 \
   planning_radius_m:=0.35 \
@@ -627,6 +628,13 @@ ros2 launch robotics_sim sim.launch.py \
 
 This makes parameter sweeps reproducible: each result row contains both the
 measured outcomes and the safety configuration that produced them.
+
+`scan_delay_s` is separate from `sensor_latency`. `sensor_latency` changes the
+stopping-distance assumption, while `scan_delay_s` makes the safety supervisor
+use an older received `/scan` message. The delay is measured from message
+arrival time, so it remains meaningful when ROS simulation time is enabled.
+The default `scan_delay_s=0.0` uses the newest available scan and preserves the
+baseline behaviour.
 
 `planning_radius_m` controls the global planner's grid obstacle inflation.
 The default `0.35 m` represents the robot footprint plus discretization
@@ -707,8 +715,8 @@ run completed without a safety override.
 
 The `sensor_latency` parameter is used in the stopping-envelope model as the
 time available for sensing, command transport, and actuation before braking
-starts. It is therefore a modelled latency term; this experiment does not
-inject an actual delay into ROS messages or Gazebo sensor delivery.
+starts. `scan_delay_s` is the separate experimental parameter for injecting an
+actual delay into the safety supervisor's LiDAR input.
 
 Both runs below use `minimum_clearance=0.50 m`,
 `safety_margin=0.55 m`, and `planning_radius_m=0.41 m`:
@@ -725,6 +733,11 @@ sensor or network latency has no effect: a tighter route, higher speed, noisy
 LiDAR, or actuator delay could make the additional stopping distance active.
 The experiment shows that latency must be evaluated together with obstacle
 inflation, speed limits, and safety margin rather than as an isolated number.
+
+The next experiment should hold `sensor_latency` fixed and sweep only
+`scan_delay_s`, for example `0.00`, `0.10`, `0.20`, and `0.30 s`. That isolates
+the effect of stale sensor data from the effect of a more conservative braking
+assumption.
 
 ## 12. Current status and roadmap
 

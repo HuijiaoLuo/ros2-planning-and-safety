@@ -23,6 +23,7 @@ def generate_launch_description():
     safety_margin = LaunchConfiguration("safety_margin")
     recovery_timeout_s = LaunchConfiguration("recovery_timeout_s")
     planning_radius_m = LaunchConfiguration("planning_radius_m")
+    scan_delay_s = LaunchConfiguration("scan_delay_s")
 
     return LaunchDescription(
         [
@@ -60,6 +61,11 @@ def generate_launch_description():
                 "sensor_latency",
                 default_value="0.10",
                 description="Assumed perception/control latency in seconds.",
+            ),
+            DeclareLaunchArgument(
+                "scan_delay_s",
+                default_value="0.0",
+                description="Artificial delay before the safety supervisor uses a LiDAR scan.",
             ),
             DeclareLaunchArgument(
                 "safety_margin",
@@ -103,6 +109,7 @@ def generate_launch_description():
                     "collision_topic": collision_topic,
                     "minimum_clearance": minimum_clearance,
                     "sensor_latency": sensor_latency,
+                    "scan_delay_s": scan_delay_s,
                     "safety_margin": safety_margin,
                     "recovery_timeout_s": recovery_timeout_s,
                     "planning_radius_m": planning_radius_m,

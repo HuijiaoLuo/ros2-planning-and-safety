@@ -3,6 +3,7 @@
 
 import math
 import time
+from collections import deque
 from typing import Optional
 
 import rclpy
@@ -22,6 +23,7 @@ class SafetySupervisor(Node):
 
         self.declare_parameter("max_deceleration", 0.8)
         self.declare_parameter("sensor_latency", 0.10)
+        self.declare_parameter("scan_delay_s", 0.0)
         self.declare_parameter("safety_margin", 0.15)
         # Keep additional clearance beyond the planner's footprint inflation.
         # The speed-dependent envelope can still impose a larger distance
@@ -42,6 +44,7 @@ class SafetySupervisor(Node):
 
         self.max_deceleration = float(self.get_parameter("max_deceleration").value)
         self.sensor_latency = float(self.get_parameter("sensor_latency").value)
+        self.scan_delay = max(0.0, float(self.get_parameter("scan_delay_s").value))
         self.safety_margin = float(self.get_parameter("safety_margin").value)
         self.minimum_clearance = float(
             self.get_parameter("minimum_clearance").value
@@ -97,6 +100,7 @@ class SafetySupervisor(Node):
 
         self.latest_raw_command: Optional[Twist] = None
         self.latest_scan: Optional[LaserScan] = None
+        self.scan_buffer: deque[tuple[float, LaserScan]] = deque()
         self.latest_odom: Optional[Odometry] = None
         self.intervention_count = 0
         self.was_blocked = False
@@ -117,7 +121,29 @@ class SafetySupervisor(Node):
         self.latest_raw_command = message
 
     def scan_callback(self, message: LaserScan) -> None:
-        self.latest_scan = message
+        received_at = time.monotonic()
+        self.scan_buffer.append((received_at, message))
+
+        # Keep only the small history needed to select a delayed scan. The
+        # timer callback removes entries that are older than the selected one.
+        while len(self.scan_buffer) > 2:
+            second_time = self.scan_buffer[1][0]
+            if second_time > received_at - self.scan_delay:
+                break
+            self.scan_buffer.popleft()
+
+    def update_delayed_scan(self) -> None:
+        """Expose a scan that is at least ``scan_delay_s`` old.
+
+        The delay is measured from message arrival time rather than ROS header
+        time. This keeps the experiment independent of whether simulation time
+        has been enabled for the node.
+        """
+        target_time = time.monotonic() - self.scan_delay
+        while len(self.scan_buffer) >= 2 and self.scan_buffer[1][0] <= target_time:
+            self.scan_buffer.popleft()
+        if self.scan_buffer and self.scan_buffer[0][0] <= target_time:
+            self.latest_scan = self.scan_buffer[0][1]
 
     def odom_callback(self, message: Odometry) -> None:
         self.latest_odom = message
@@ -213,6 +239,7 @@ class SafetySupervisor(Node):
         if self.latest_raw_command is None:
             return
 
+        self.update_delayed_scan()
         if self.latest_scan is None:
             self.publisher.publish(Twist())
             self.publish_override_state(True)
@@ -249,7 +276,8 @@ class SafetySupervisor(Node):
         self.tilt_stop_active = False
 
         raw = self.latest_raw_command
-        distance = self.front_distance(self.latest_scan)
+        scan = self.latest_scan
+        distance = self.front_distance(scan)
         dynamic_stop_distance = self.stop_distance(abs(raw.linear.x))
         required_distance = max(dynamic_stop_distance, self.minimum_clearance)
 
@@ -268,7 +296,7 @@ class SafetySupervisor(Node):
                 # request a turn toward an obstacle when its map/path is stale
                 # or the robot has cut a corner, so use measured side clearance
                 # rather than trusting raw.angular.z in this state.
-                self.recovery_turn = self.choose_recovery_turn(self.latest_scan)
+                self.recovery_turn = self.choose_recovery_turn(scan)
             # Keep the initial recovery direction for the complete blocked
             # episode. Recomputing left/right clearance while the robot turns
             # makes the obstacle move between the two scan sectors and can

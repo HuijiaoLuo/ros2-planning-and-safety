@@ -46,6 +46,7 @@ class EvaluationLogger(Node):
         self.declare_parameter("safety_override_topic", "/safety_override")
         self.declare_parameter("minimum_clearance", 0.50)
         self.declare_parameter("sensor_latency", 0.10)
+        self.declare_parameter("scan_delay_s", 0.0)
         self.declare_parameter("safety_margin", 0.15)
         self.declare_parameter("planning_radius_m", 0.35)
 
@@ -64,6 +65,9 @@ class EvaluationLogger(Node):
         )
         self.configured_sensor_latency = float(
             self.get_parameter("sensor_latency").value
+        )
+        self.configured_scan_delay = float(
+            self.get_parameter("scan_delay_s").value
         )
         self.configured_safety_margin = float(
             self.get_parameter("safety_margin").value
@@ -360,6 +364,7 @@ class EvaluationLogger(Node):
             ),
             "configured_minimum_clearance_m": self.configured_minimum_clearance,
             "configured_sensor_latency_s": self.configured_sensor_latency,
+            "configured_scan_delay_s": self.configured_scan_delay,
             "configured_safety_margin_m": self.configured_safety_margin,
             "configured_planning_radius_m": self.configured_planning_radius,
             "minimum_clearance_m": (
