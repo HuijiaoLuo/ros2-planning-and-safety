@@ -1,5 +1,7 @@
 # Classical Path Planning and Sensor-Aware Safety
 
+[![CI](https://github.com/HuijiaoLuo/ros2-planning-and-safety/actions/workflows/ci.yml/badge.svg)](https://github.com/HuijiaoLuo/ros2-planning-and-safety/actions/workflows/ci.yml)
+
 An incremental robotics portfolio project built around a differential-drive mobile robot.
 
 The central question is:
