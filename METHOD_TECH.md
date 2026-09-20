@@ -810,6 +810,21 @@ for a total intervention time of `0.350 s`; the other two seeds produced no
 intervention. This illustrates why repeated seeds are useful even when the
 success rate remains unchanged.
 
+### Noise-induced planning boundary
+
+To locate the feasibility boundary, the same `0.03 m` noise case was tested
+with a smaller planning radius:
+
+| Noise standard deviation | Planning radius | `success` | `travelled_distance_m` | `minimum_clearance_m` | `safety_override_ratio` | `collision` |
+| ---: | ---: | :---: | ---: | ---: | ---: | :---: |
+| 0.03 m | 0.40 m | no | 0.373 | 0.551 | 0.722 | false |
+| 0.03 m | 0.41 m | yes | 3.983 | 0.632 | 0.000 | false |
+
+The `0.40 m` case remained collision-free but spent most of the run in
+safety recovery and did not reach the goal. Together with the three successful
+`0.41 m` seeds, this identifies `0.41 m` as the smallest tested feasible
+planning radius for this map and noise level.
+
 An interaction test combined `scan_delay_s=0.30 s` with
 `scan_noise_std_m=0.05 m`, using `planning_radius_m=0.41 m` and seed `1`:
 

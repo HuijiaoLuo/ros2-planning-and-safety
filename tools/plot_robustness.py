@@ -111,7 +111,17 @@ def main() -> None:
         "configured_scan_delay_s": 0.0,
         "configured_safety_margin_m": 0.15,
     }
-    for radius, color in ((0.35, "#c43c39"), (0.41, "#2f8f5b")):
+    noise_radii = sorted(
+        {
+            value
+            for row in rows
+            if matches(row, **noise_base)
+            and (value := number(row, "configured_planning_radius_m")) is not None
+        }
+    )
+    colors = ("#c43c39", "#d28b27", "#2f8f5b", "#286090")
+    for index, radius in enumerate(noise_radii):
+        color = colors[index % len(colors)]
         x, y = ordered_points(
             rows,
             "configured_scan_noise_std_m",
@@ -134,7 +144,8 @@ def main() -> None:
     axes[1, 0].legend()
     axes[1, 0].grid(True, alpha=0.3)
 
-    for radius, color in ((0.35, "#c43c39"), (0.41, "#2f8f5b")):
+    for index, radius in enumerate(noise_radii):
+        color = colors[index % len(colors)]
         x, y = ordered_points(
             rows,
             "configured_scan_noise_std_m",
