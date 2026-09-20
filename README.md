@@ -9,6 +9,12 @@ The central question is:
 
 > How should a robot turn map and sensor measurements into safe motion commands?
 
+<p align="center">
+  <img src="docs/assets/baseline_navigation.gif" alt="Baseline A* navigation with a differential-drive robot" width="820">
+</p>
+
+<p align="center"><em>Baseline run: A* path planning, closed-loop path following, and LiDAR-aware safety supervision.</em></p>
+
 ## Current status
 
 The current milestone includes:
