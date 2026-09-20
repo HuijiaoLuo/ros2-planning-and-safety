@@ -81,6 +81,8 @@
       <pose>2.0 0 0.01 0 0 0</pose>
       <link name="goal_link">
         <visual name="goal_disk">
+          <!-- Keep the marker visible in the GUI, but outside the LiDAR mask. -->
+          <visibility_flags>2</visibility_flags>
           <geometry>
             <cylinder>
               <radius>0.22</radius>
@@ -94,6 +96,7 @@
           </material>
         </visual>
         <visual name="goal_pole">
+          <visibility_flags>2</visibility_flags>
           <pose>0 0 0.50 0 0 0</pose>
           <geometry>
             <cylinder>
@@ -107,6 +110,7 @@
           </material>
         </visual>
         <visual name="goal_flag">
+          <visibility_flags>2</visibility_flags>
           <pose>0.10 0 0.88 0 0 0</pose>
           <geometry>
             <box>
@@ -177,6 +181,8 @@
               <max>10.0</max>
               <resolution>0.01</resolution>
             </range>
+            <!-- Detect physical scene visuals (flag 1), not the GUI-only goal marker (flag 2). -->
+            <visibility_mask>1</visibility_mask>
           </ray>
           <always_on>true</always_on>
           <visualize>true</visualize>

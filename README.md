@@ -54,7 +54,13 @@ The planning core is implemented in both Python and C++:
 - Gazebo integration provides ground-truth `/odom`, wheel `/wheel_odom`, and
   `/scan` through `ros_gz_bridge`.
 - The first path-following configuration uses a `0.10 m` lookahead and a
-  `0.20 m/s` speed limit to reduce corner cutting near inflated obstacles.
+  `0.20 m/s` speed limit. It also scales forward speed with heading error and
+  rotates in place for errors above `30°` to reduce corner cutting near
+  inflated obstacles. The follower also advances through the ordered path
+  prefix instead of selecting a geometrically nearer point beyond a detour.
+  Within `0.60 m` of the final goal, it switches to a damped final-approach
+  controller that tracks the endpoint directly, limits angular speed to
+  `0.60 rad/s`, and applies a small heading deadband.
 
 ## Search algorithms
 
@@ -214,13 +220,20 @@ $$
 d_{stop} = \frac{v^2}{2a_{max}} + v\tau + d_{margin}
 $$
 
-It also applies a conservative minimum clearance and a hysteresis band to
+It also applies a `0.35 m` minimum clearance aligned with the planner's inflated
+robot radius, plus a hysteresis band to
 avoid stop/release chatter near the threshold. When forward motion is blocked,
-it preserves the path follower's planned turn; a side-clearance turn is used
-when the controller has not supplied a meaningful angular command. Commands
-below `0.10 rad/s` are treated as insufficient for escaping a blocked state.
-Later experiments will compare this layer with noisy sensors, control latency,
-and wheel-odometry drift.
+it owns the recovery direction for the duration of the blocked state. It
+selects the side with more
+measured LiDAR clearance, even if the path follower requests the opposite
+turn, and holds that direction until the front clearance exceeds the release
+threshold. The safety layer owns the angular command for the complete blocked
+episode; it does not forward a competing path-follower turn. Later experiments will compare this layer with noisy sensors, control
+latency, and wheel-odometry drift. When
+the path follower intentionally commands pure rotation (`linear.x=0`) during a
+blocked episode, the safety layer keeps ownership of the recovery turn. In the
+simulation MVP, it also stops if the estimated roll or pitch
+exceeds `10°`, preventing a tipped robot from continuing to receive commands.
 
 ## Roadmap
 

@@ -6,6 +6,7 @@ from typing import Optional
 
 import rclpy
 from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
@@ -20,15 +21,20 @@ class SafetySupervisor(Node):
         self.declare_parameter("max_deceleration", 0.8)
         self.declare_parameter("sensor_latency", 0.10)
         self.declare_parameter("safety_margin", 0.15)
-        self.declare_parameter("minimum_clearance", 0.35)
-        # Prevent command chattering when the measured range oscillates around
-        # the intervention threshold, e.g. 0.348 m <-> 0.352 m.
-        self.declare_parameter("clearance_hysteresis", 0.10)
+        # Keep additional clearance beyond the planner's footprint inflation.
+        # The speed-dependent envelope can still impose a larger distance
+        # when the commanded speed requires it.
+        self.declare_parameter("minimum_clearance", 0.50)
+        # Prevent command chattering without requiring a large clearance jump
+        # after the robot has already turned away from the obstacle.
+        self.declare_parameter("clearance_hysteresis", 0.03)
         self.declare_parameter("front_angle_deg", 60.0)
+        self.declare_parameter("side_inner_angle_deg", 30.0)
         self.declare_parameter("recovery_turn_speed", 0.60)
-        # A tiny angular command is not enough to escape a blocked state.
-        # Below this threshold, use the latched recovery turn instead.
-        self.declare_parameter("minimum_planned_turn_speed", 0.10)
+        # Calibration for this Gazebo laser frame: a positive scan-side angle
+        # maps to a negative base angular command in this model.
+        self.declare_parameter("recovery_turn_sign", -1.0)
+        self.declare_parameter("max_tilt_deg", 10.0)
         self.declare_parameter("publish_rate_hz", 20.0)
 
         self.max_deceleration = float(self.get_parameter("max_deceleration").value)
@@ -43,11 +49,17 @@ class SafetySupervisor(Node):
         self.front_angle = math.radians(
             float(self.get_parameter("front_angle_deg").value)
         )
+        self.side_inner_angle = math.radians(
+            float(self.get_parameter("side_inner_angle_deg").value)
+        )
         self.recovery_turn_speed = float(
             self.get_parameter("recovery_turn_speed").value
         )
-        self.minimum_planned_turn_speed = float(
-            self.get_parameter("minimum_planned_turn_speed").value
+        self.recovery_turn_sign = float(
+            self.get_parameter("recovery_turn_sign").value
+        )
+        self.max_tilt = math.radians(
+            float(self.get_parameter("max_tilt_deg").value)
         )
         publish_rate = float(self.get_parameter("publish_rate_hz").value)
 
@@ -64,13 +76,21 @@ class SafetySupervisor(Node):
             self.scan_callback,
             qos_profile_sensor_data,
         )
+        self.odom_subscription = self.create_subscription(
+            Odometry,
+            "/odom",
+            self.odom_callback,
+            qos_profile_sensor_data,
+        )
         self.timer = self.create_timer(1.0 / publish_rate, self.publish_safe_command)
 
         self.latest_raw_command: Optional[Twist] = None
         self.latest_scan: Optional[LaserScan] = None
+        self.latest_odom: Optional[Odometry] = None
         self.intervention_count = 0
         self.was_blocked = False
         self.recovery_turn = 0.0
+        self.tilt_stop_active = False
 
     def publish_stop(self) -> None:
         self.publisher.publish(Twist())
@@ -80,6 +100,26 @@ class SafetySupervisor(Node):
 
     def scan_callback(self, message: LaserScan) -> None:
         self.latest_scan = message
+
+    def odom_callback(self, message: Odometry) -> None:
+        self.latest_odom = message
+
+    def roll_pitch(self) -> Optional[tuple[float, float]]:
+        """Return roll and pitch from the latest odometry orientation."""
+        if self.latest_odom is None:
+            return None
+
+        orientation = self.latest_odom.pose.pose.orientation
+        x, y, z, w = orientation.x, orientation.y, orientation.z, orientation.w
+
+        sin_roll = 2.0 * (w * x + y * z)
+        cos_roll = 1.0 - 2.0 * (x * x + y * y)
+        roll = math.atan2(sin_roll, cos_roll)
+
+        sin_pitch = 2.0 * (w * y - z * x)
+        sin_pitch = max(-1.0, min(1.0, sin_pitch))
+        pitch = math.asin(sin_pitch)
+        return roll, pitch
 
     def front_distance(self, scan: LaserScan) -> Optional[float]:
         """Return the closest valid range inside the configured front sector."""
@@ -115,14 +155,18 @@ class SafetySupervisor(Node):
         return braking_distance + speed * self.sensor_latency + self.safety_margin
 
     def side_clearance(self, scan: LaserScan, *, left: bool) -> float:
-        """Return the closest valid return in a 90-degree side sector."""
+        """Return the closest valid return in a side sector.
+
+        The central forward sector is excluded so a single obstacle corner
+        does not make the preferred recovery side alternate every scan.
+        """
         closest = None
         saw_clear_ray = False
         for index, value in enumerate(scan.ranges):
             angle = scan.angle_min + index * scan.angle_increment
-            in_sector = 0.0 <= angle <= math.pi / 2.0
+            in_sector = self.side_inner_angle <= angle <= math.pi / 2.0
             if not left:
-                in_sector = -math.pi / 2.0 <= angle < 0.0
+                in_sector = -math.pi / 2.0 <= angle <= -self.side_inner_angle
             if not in_sector or math.isnan(value):
                 continue
             if math.isinf(value):
@@ -140,7 +184,11 @@ class SafetySupervisor(Node):
         """Turn toward the side with more measured clearance."""
         left_clearance = self.side_clearance(scan, left=True)
         right_clearance = self.side_clearance(scan, left=False)
-        direction = 1.0 if left_clearance >= right_clearance else -1.0
+        direction = (
+            self.recovery_turn_sign
+            if left_clearance >= right_clearance
+            else -self.recovery_turn_sign
+        )
         return direction * self.recovery_turn_speed
 
     def publish_safe_command(self) -> None:
@@ -153,6 +201,31 @@ class SafetySupervisor(Node):
                 self.get_logger().warn("No LiDAR scan received; holding robot stopped.")
             self.was_blocked = True
             return
+
+        tilt = self.roll_pitch()
+        if tilt is None:
+            self.publisher.publish(Twist())
+            if not self.tilt_stop_active:
+                self.get_logger().warn("No /odom pose received; holding robot stopped.")
+            self.tilt_stop_active = True
+            return
+
+        roll, pitch = tilt
+        if max(abs(roll), abs(pitch)) > self.max_tilt:
+            self.publisher.publish(Twist())
+            if not self.tilt_stop_active:
+                self.get_logger().error(
+                    "Tilt safety stop: "
+                    f"roll={math.degrees(roll):.1f} deg, "
+                    f"pitch={math.degrees(pitch):.1f} deg, "
+                    f"limit={math.degrees(self.max_tilt):.1f} deg."
+                )
+            self.tilt_stop_active = True
+            self.was_blocked = True
+            self.recovery_turn = 0.0
+            return
+
+        self.tilt_stop_active = False
 
         raw = self.latest_raw_command
         distance = self.front_distance(self.latest_scan)
@@ -170,23 +243,28 @@ class SafetySupervisor(Node):
 
         if blocked:
             if not self.was_blocked:
+                # Safety owns the recovery direction. The path follower can
+                # request a turn toward an obstacle when its map/path is stale
+                # or the robot has cut a corner, so use measured side clearance
+                # rather than trusting raw.angular.z in this state.
                 self.recovery_turn = self.choose_recovery_turn(self.latest_scan)
-            # Stop forward motion. If the path follower already knows which
-            # way the planned path turns, preserve that angular command. The
-            # supervisor supplies its own turn only as a fallback; otherwise
-            # the two controllers can fight each other at the obstacle edge.
+            # Keep the initial recovery direction for the complete blocked
+            # episode. Recomputing left/right clearance while the robot turns
+            # makes the obstacle move between the two scan sectors and can
+            # cause the supervisor to alternate directions indefinitely.
+            # Do not forward the path follower's angular command here: the
+            # safety supervisor owns the command while the forward sector is
+            # blocked.
             safe_command = Twist()
-            if abs(raw.angular.z) >= self.minimum_planned_turn_speed:
-                safe_command.angular.z = raw.angular.z
-            else:
-                safe_command.angular.z = self.recovery_turn
+            safe_command.angular.z = self.recovery_turn
             self.publisher.publish(safe_command)
             if not self.was_blocked:
                 self.intervention_count += 1
                 observed = "unknown" if distance is None else f"{distance:.3f} m"
                 self.get_logger().warn(
-                    "Safety stop: front distance "
+                    "Safety recovery: front distance "
                     f"{observed} <= stopping envelope {required_distance:.3f} m. "
+                    f"angular_z={safe_command.angular.z:.2f} rad/s. "
                     f"Interventions: {self.intervention_count}"
                 )
         else:

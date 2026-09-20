@@ -50,7 +50,16 @@ class PathFollower(Node):
         self.declare_parameter("max_angular_speed", 1.2)
         self.declare_parameter("distance_gain", 0.8)
         self.declare_parameter("heading_gain", 2.0)
-        self.declare_parameter("rotate_in_place_threshold", math.pi / 3.0)
+        # Close to the final goal, following changing grid waypoints can make
+        # the desired bearing jump from one side to the other. Track the
+        # endpoint directly with a gentler angular controller instead.
+        self.declare_parameter("final_approach_distance", 0.60)
+        self.declare_parameter("final_approach_heading_gain", 1.0)
+        self.declare_parameter("final_approach_max_angular_speed", 0.60)
+        self.declare_parameter("heading_deadband", 0.03)
+        # Grid paths contain sharp 90-degree corners. Rotate before driving
+        # through a large heading error instead of cutting the corner.
+        self.declare_parameter("rotate_in_place_threshold", math.pi / 6.0)
         self.declare_parameter("publish_rate_hz", 20.0)
 
         self.lookahead_distance = float(
@@ -61,6 +70,18 @@ class PathFollower(Node):
         self.max_angular_speed = float(self.get_parameter("max_angular_speed").value)
         self.distance_gain = float(self.get_parameter("distance_gain").value)
         self.heading_gain = float(self.get_parameter("heading_gain").value)
+        self.final_approach_distance = float(
+            self.get_parameter("final_approach_distance").value
+        )
+        self.final_approach_heading_gain = float(
+            self.get_parameter("final_approach_heading_gain").value
+        )
+        self.final_approach_max_angular_speed = float(
+            self.get_parameter("final_approach_max_angular_speed").value
+        )
+        self.heading_deadband = float(
+            self.get_parameter("heading_deadband").value
+        )
         self.rotate_in_place_threshold = float(
             self.get_parameter("rotate_in_place_threshold").value
         )
@@ -118,7 +139,7 @@ class PathFollower(Node):
     def publish_stop(self) -> None:
         self.publisher.publish(Twist())
 
-    def select_target(self, x: float, y: float) -> Optional[tuple[float, float]]:
+    def select_target(self, _x: float, _y: float) -> Optional[tuple[float, float]]:
         if self.latest_path is None or not self.latest_path.poses:
             return None
 
@@ -126,22 +147,20 @@ class PathFollower(Node):
             (pose.pose.position.x, pose.pose.position.y)
             for pose in self.latest_path.poses
         ]
-        nearest_index = min(
-            range(len(points)),
-            key=lambda index: math.hypot(points[index][0] - x, points[index][1] - y),
-        )
-
+        # The planner publishes an ordered collision-free path whose first
+        # pose is the current start cell. Follow its prefix in order. Choosing
+        # the globally nearest pose can jump across a U-shaped detour: a later
+        # point may be geometrically closer while the intervening path still
+        # has to go around an obstacle.
         travelled = 0.0
-        target_index = nearest_index
-        for index in range(nearest_index, len(points) - 1):
+        for index in range(len(points) - 1):
             travelled += math.hypot(
                 points[index + 1][0] - points[index][0],
                 points[index + 1][1] - points[index][1],
             )
-            target_index = index + 1
             if travelled >= self.lookahead_distance:
-                break
-        return points[target_index]
+                return points[index + 1]
+        return points[-1]
 
     def control_loop(self) -> None:
         if self.latest_path is None:
@@ -180,26 +199,52 @@ class PathFollower(Node):
             self.publish_stop()
             return
 
-        target = self.select_target(position.x, position.y)
-        if target is None:
-            self.report_state("Stopped because no path target is available.")
-            self.publish_stop()
-            return
+        final_approach = goal_distance <= self.final_approach_distance
+        if final_approach:
+            # The final path endpoint is more stable than the next grid cell
+            # once the robot is close enough to the goal.
+            target_x, target_y = goal.x, goal.y
+        else:
+            target = self.select_target(position.x, position.y)
+            if target is None:
+                self.report_state("Stopped because no path target is available.")
+                self.publish_stop()
+                return
+            target_x, target_y = target
 
-        target_x, target_y = target
         target_heading = math.atan2(target_y - position.y, target_x - position.x)
         heading_error = wrap_angle(target_heading - yaw)
         target_distance = math.hypot(target_x - position.x, target_y - position.y)
 
+        if abs(heading_error) < self.heading_deadband:
+            heading_error = 0.0
+
+        angular_gain = (
+            self.final_approach_heading_gain
+            if final_approach
+            else self.heading_gain
+        )
+        angular_limit = (
+            self.final_approach_max_angular_speed
+            if final_approach
+            else self.max_angular_speed
+        )
+
         command = Twist()
         command.angular.z = clamp(
-            self.heading_gain * heading_error,
-            -self.max_angular_speed,
-            self.max_angular_speed,
+            angular_gain * heading_error,
+            -angular_limit,
+            angular_limit,
         )
         if abs(heading_error) <= self.rotate_in_place_threshold:
+            # Reduce forward speed continuously as the heading error grows.
+            # This prevents a command such as v=0.15, omega=1.20 from cutting
+            # across an inflated-grid corner near an obstacle.
+            heading_scale = 1.0 - (
+                abs(heading_error) / self.rotate_in_place_threshold
+            )
             command.linear.x = clamp(
-                self.distance_gain * target_distance,
+                self.distance_gain * target_distance * heading_scale,
                 0.0,
                 self.max_linear_speed,
             )
@@ -207,7 +252,8 @@ class PathFollower(Node):
             command.linear.x = 0.0
 
         self.report_state(
-            f"Tracking path; target=({target_x:.2f}, {target_y:.2f}), "
+            f"Tracking {'final goal' if final_approach else 'path'}; "
+            f"target=({target_x:.2f}, {target_y:.2f}), "
             f"v={command.linear.x:.2f}, omega={command.angular.z:.2f}."
         )
         self.publisher.publish(command)

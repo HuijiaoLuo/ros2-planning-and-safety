@@ -218,17 +218,24 @@ Each pose in the path is the center of one free grid cell. The path is geometry,
 not a velocity command. The path follower reads this path and publishes
 `/cmd_vel_raw`.
 
-The path follower selects a lookahead point on the path, computes the heading
-error from the current odometry, and applies the same unicycle-style control
-idea as the direct waypoint baseline. The important difference is the source of
-the target: it comes from the planned path instead of always being the final
-goal.
+The path follower advances through the ordered path prefix until it reaches a
+`0.10 m` lookahead distance, computes the heading error from the current
+odometry, and applies the same unicycle-style control idea as the direct
+waypoint baseline. It does not select an arbitrary globally nearest path pose:
+that can jump across a detour when a later pose is geometrically closer than
+the safe intermediate path. The important difference is the source of the
+target: it comes from the planned path instead of always being the final goal.
 
 The initial ROS2 tuning uses a `0.10 m` lookahead and a maximum linear speed of
-`0.20 m/s`. This deliberately keeps the controller close to the grid path. A
-larger lookahead can cut corners around obstacle-inflation boundaries, causing
-the continuously moving robot to enter a grid cell that the planner considers
-unsafe.
+`0.20 m/s`. Forward speed is scaled down as heading error increases, and the
+robot rotates in place when the error exceeds `30°`. This deliberately keeps
+the controller close to the grid path. A larger lookahead can cut corners
+around obstacle-inflation boundaries, causing the continuously moving robot to
+enter a grid cell that the planner considers unsafe. Within `0.60 m` of the
+final endpoint, the follower switches to a final-approach mode: it tracks the
+endpoint directly, uses a lower heading gain and `0.60 rad/s` angular limit,
+and applies a `0.03 rad` heading deadband. This prevents the desired bearing
+from jumping between nearby grid waypoints during the final approach.
 
 The first map uses `odom` as its frame and is aligned with the Gazebo world. This
 avoids introducing TF and localization before the planner itself has been
@@ -262,14 +269,24 @@ d_front > max(d_stop, d_min)
 ~~~
 
 The current supervisor uses a `±60°` forward sector and a hard minimum
-clearance of `0.35 m` in addition to the speed-dependent stopping envelope.
-It also uses a `0.10 m` hysteresis band when releasing a stop, so a scan that
+clearance of `0.35 m`, matching the planner's inflated robot radius, in addition
+to the speed-dependent stopping envelope.
+It also uses a `0.03 m` hysteresis band when releasing a stop, so a scan that
 oscillates around the threshold does not repeatedly toggle the command.
-When forward motion is blocked, it sets `linear.x=0` and preserves the
-path follower's angular command when it is meaningful. A side-clearance
-recovery turn is used when the path follower's command is below `0.10 rad/s`.
-This keeps the safety layer from fighting the global A* path follower while
-still providing a fallback that can escape a blocked state.
+When forward motion is blocked, it sets `linear.x=0` and selects one angular
+command for that blocked episode from the side with more measured LiDAR
+clearance. The safety layer owns this recovery direction even if the path
+follower requests the opposite turn; this prevents a stale or corner-cutting
+path command from steering into the obstacle. The latched turn prevents the
+safety layer and path follower from alternating directions at the obstacle
+edge. The direction remains fixed until the front clearance exceeds the
+hysteresis release threshold; side clearances are not recomputed during the
+same blocked episode because the rotating robot would make the two sectors
+alternate. If the path follower intentionally commands pure rotation with
+`linear.x=0` during a blocked episode, the supervisor keeps its locked recovery
+turn instead of forwarding the competing path command. In the ideal simulation MVP, a separate tilt guard
+stops the robot when roll or pitch exceeds `10°`, so a collision cannot turn
+into extended tipped-state motion.
 
 For ROS2 LaserScan messages, a positive infinite range means that the ray did
 not hit an obstacle within the sensor range. The supervisor therefore treats a
