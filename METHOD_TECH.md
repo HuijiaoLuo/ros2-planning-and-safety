@@ -751,10 +751,10 @@ safety supervisor changes:
 
 | `scan_delay_s` | `success` | `time_to_goal_s` | `minimum_clearance_m` | `safety_override_count` | `safety_override_time_s` | `safety_override_ratio` | `collision` |
 | ---: | :---: | ---: | ---: | ---: | ---: | ---: | :---: |
-| 0.00 s | yes | 65.95 | 0.520 | 1 | 0.000 | 0.0000 | false |
-| 0.10 s | yes | 68.22 | 0.518 | 1 | 0.050 | 0.0007 | false |
-| 0.20 s | yes | 66.37 | 0.519 | 1 | 0.150 | 0.0023 | false |
-| 0.30 s | yes | 67.58 | 0.518 | 1 | 0.250 | 0.0037 | false |
+| 0.00 s | yes | 65.04 | 0.521 | 0 | 0.000 | 0.0000 | false |
+| 0.10 s | yes | 68.99 | 0.520 | 1 | 0.050 | 0.0007 | false |
+| 0.20 s | yes | 64.88 | 0.520 | 1 | 0.150 | 0.0023 | false |
+| 0.30 s | yes | 67.51 | 0.520 | 1 | 0.250 | 0.0037 | false |
 
 All four runs reached the goal without collision. The time-to-goal variation
 is not monotonic because it also includes controller and simulator timing
@@ -820,6 +820,33 @@ An interaction test combined `scan_delay_s=0.30 s` with
 The combined uncertainty still produced a successful collision-free run, but
 it triggered a short safety intervention. More seeds would be needed before
 making a statistical claim about the interaction effect.
+
+### Robustness summary tool
+
+The one-row evaluation files can be aggregated without starting ROS or
+Gazebo:
+
+```bash
+python tools/summarize_robustness.py \
+  --glob "results/sweep_*.csv" \
+  --output results/robustness_summary.csv
+```
+
+The tool groups runs by safety and sensing configuration, keeps the random
+seeds visible, and reports success rate, collision count, mean and 95th
+percentile time-to-goal, clearance, and safety-override statistics. Legacy
+CSV files without the complete configuration columns are skipped so
+that missing values are not mistaken for a real zero-delay or zero-noise
+experiment. The summary is generated data and remains ignored by Git.
+
+To render the current summary as a four-panel figure for the project
+documentation:
+
+```bash
+python tools/plot_robustness.py \
+  --summary results/robustness_summary.csv \
+  --output docs/assets/robustness_summary.png
+```
 
 Compared with the earlier `0.35 m` planning radius, the larger radius leaves
 enough physical clearance for the noisy safety observation without causing a
