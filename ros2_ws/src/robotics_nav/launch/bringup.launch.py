@@ -5,6 +5,12 @@ from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
+    minimum_clearance = LaunchConfiguration("minimum_clearance")
+    sensor_latency = LaunchConfiguration("sensor_latency")
+    safety_margin = LaunchConfiguration("safety_margin")
+    recovery_timeout_s = LaunchConfiguration("recovery_timeout_s")
+    planning_radius_m = LaunchConfiguration("planning_radius_m")
+
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -16,6 +22,31 @@ def generate_launch_description():
                 "collision_topic",
                 default_value="/collision/contacts",
                 description="ROS topic carrying Gazebo contact messages.",
+            ),
+            DeclareLaunchArgument(
+                "minimum_clearance",
+                default_value="0.50",
+                description="Minimum front clearance enforced by the safety supervisor.",
+            ),
+            DeclareLaunchArgument(
+                "sensor_latency",
+                default_value="0.10",
+                description="Assumed perception/control latency in seconds.",
+            ),
+            DeclareLaunchArgument(
+                "safety_margin",
+                default_value="0.15",
+                description="Additional stopping-distance safety margin in metres.",
+            ),
+            DeclareLaunchArgument(
+                "recovery_timeout_s",
+                default_value="8.0",
+                description="Maximum continuous safety-recovery time in seconds.",
+            ),
+            DeclareLaunchArgument(
+                "planning_radius_m",
+                default_value="0.35",
+                description="Obstacle-inflation radius used by the global planner.",
             ),
             Node(
                 package="robotics_nav",
@@ -43,13 +74,14 @@ def generate_launch_description():
                 parameters=[
                     {
                         "max_deceleration": 0.8,
-                        "sensor_latency": 0.10,
-                        "safety_margin": 0.15,
-                        "minimum_clearance": 0.50,
+                        "sensor_latency": sensor_latency,
+                        "safety_margin": safety_margin,
+                        "minimum_clearance": minimum_clearance,
                         "clearance_hysteresis": 0.03,
                         "front_angle_deg": 60.0,
                         "side_inner_angle_deg": 30.0,
                         "recovery_turn_speed": 0.60,
+                        "recovery_timeout_s": recovery_timeout_s,
                         "recovery_turn_sign": -1.0,
                         "max_tilt_deg": 10.0,
                         "publish_rate_hz": 20.0,
@@ -71,7 +103,7 @@ def generate_launch_description():
                     {
                         "goal_x": 2.0,
                         "goal_y": 0.0,
-                        "robot_radius_m": 0.35,
+                        "robot_radius_m": planning_radius_m,
                     }
                 ],
             ),
@@ -87,6 +119,10 @@ def generate_launch_description():
                         "sample_rate_hz": 20.0,
                         "output_path": LaunchConfiguration("evaluation_output"),
                         "collision_topic": LaunchConfiguration("collision_topic"),
+                        "minimum_clearance": minimum_clearance,
+                        "sensor_latency": sensor_latency,
+                        "safety_margin": safety_margin,
+                        "planning_radius_m": planning_radius_m,
                     }
                 ],
             ),

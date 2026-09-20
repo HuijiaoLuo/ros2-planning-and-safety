@@ -15,6 +15,11 @@ def generate_launch_description():
     nav_launch_path = os.path.join(nav_share, "launch", "bringup.launch.py")
     evaluation_output = LaunchConfiguration("evaluation_output")
     collision_topic = LaunchConfiguration("collision_topic")
+    minimum_clearance = LaunchConfiguration("minimum_clearance")
+    sensor_latency = LaunchConfiguration("sensor_latency")
+    safety_margin = LaunchConfiguration("safety_margin")
+    recovery_timeout_s = LaunchConfiguration("recovery_timeout_s")
+    planning_radius_m = LaunchConfiguration("planning_radius_m")
 
     return LaunchDescription(
         [
@@ -27,6 +32,31 @@ def generate_launch_description():
                 "collision_topic",
                 default_value="/collision/contacts",
                 description="ROS topic carrying Gazebo contact messages.",
+            ),
+            DeclareLaunchArgument(
+                "minimum_clearance",
+                default_value="0.50",
+                description="Minimum front clearance enforced by the safety supervisor.",
+            ),
+            DeclareLaunchArgument(
+                "sensor_latency",
+                default_value="0.10",
+                description="Assumed perception/control latency in seconds.",
+            ),
+            DeclareLaunchArgument(
+                "safety_margin",
+                default_value="0.15",
+                description="Additional stopping-distance safety margin in metres.",
+            ),
+            DeclareLaunchArgument(
+                "recovery_timeout_s",
+                default_value="8.0",
+                description="Maximum continuous safety-recovery time in seconds.",
+            ),
+            DeclareLaunchArgument(
+                "planning_radius_m",
+                default_value="0.35",
+                description="Obstacle-inflation radius used by the global planner.",
             ),
             ExecuteProcess(
                 cmd=["gz", "sim", "-r", world_path],
@@ -50,6 +80,11 @@ def generate_launch_description():
                 launch_arguments={
                     "evaluation_output": evaluation_output,
                     "collision_topic": collision_topic,
+                    "minimum_clearance": minimum_clearance,
+                    "sensor_latency": sensor_latency,
+                    "safety_margin": safety_margin,
+                    "recovery_timeout_s": recovery_timeout_s,
+                    "planning_radius_m": planning_radius_m,
                 }.items(),
             ),
         ]

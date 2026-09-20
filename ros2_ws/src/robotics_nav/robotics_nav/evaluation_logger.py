@@ -41,6 +41,10 @@ class EvaluationLogger(Node):
         self.declare_parameter("output_path", "")
         self.declare_parameter("collision_topic", "/collision/contacts")
         self.declare_parameter("safety_override_topic", "/safety_override")
+        self.declare_parameter("minimum_clearance", 0.50)
+        self.declare_parameter("sensor_latency", 0.10)
+        self.declare_parameter("safety_margin", 0.15)
+        self.declare_parameter("planning_radius_m", 0.35)
 
         self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
         self.front_angle = math.radians(
@@ -49,6 +53,18 @@ class EvaluationLogger(Node):
         sample_rate = float(self.get_parameter("sample_rate_hz").value)
         self.output_path = str(self.get_parameter("output_path").value)
         self.collision_topic = str(self.get_parameter("collision_topic").value)
+        self.configured_minimum_clearance = float(
+            self.get_parameter("minimum_clearance").value
+        )
+        self.configured_sensor_latency = float(
+            self.get_parameter("sensor_latency").value
+        )
+        self.configured_safety_margin = float(
+            self.get_parameter("safety_margin").value
+        )
+        self.configured_planning_radius = float(
+            self.get_parameter("planning_radius_m").value
+        )
         safety_override_topic = str(
             self.get_parameter("safety_override_topic").value
         )
@@ -283,10 +299,22 @@ class EvaluationLogger(Node):
             "travelled_distance_m": self.travelled_distance,
             "path_efficiency": (
                 None
-                if self.initial_planned_path_length is None
+                if self.goal_reached_at is None
+                or self.initial_planned_path_length is None
                 or self.travelled_distance <= 0.0
                 else self.initial_planned_path_length / self.travelled_distance
             ),
+            "path_length_ratio": (
+                None
+                if self.goal_reached_at is None
+                or self.initial_planned_path_length is None
+                or self.initial_planned_path_length <= 0.0
+                else self.travelled_distance / self.initial_planned_path_length
+            ),
+            "configured_minimum_clearance_m": self.configured_minimum_clearance,
+            "configured_sensor_latency_s": self.configured_sensor_latency,
+            "configured_safety_margin_m": self.configured_safety_margin,
+            "configured_planning_radius_m": self.configured_planning_radius,
             "minimum_clearance_m": (
                 None
                 if math.isinf(self.minimum_clearance)
@@ -336,7 +364,8 @@ def main(args=None) -> None:
     finally:
         node.report()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

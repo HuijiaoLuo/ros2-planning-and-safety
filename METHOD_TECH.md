@@ -144,6 +144,11 @@ The DiffDrive plugin publishes `/wheel_odom` separately. Comparing these two
 topics makes collision-induced odometry error observable and creates a clean
 transition to the later noisy-localization experiments.
 
+The simulated actuator also has explicit linear and angular velocity and
+acceleration limits. These keep the ideal model physically stable when the
+controller changes commands; they are separate from the LiDAR safety
+supervisor and do not replace its stopping envelope.
+
 The odometry and LiDAR subscriptions use ROS2's sensor-data QoS profile. This
 matters because Gazebo sensor bridges commonly publish with best-effort,
 volatile QoS; a default reliable subscription may be incompatible and receive
@@ -473,7 +478,7 @@ of the source baseline.
 - final position error and goal success;
 - elapsed time and time-to-goal;
 - initial/latest planned path length and replan count;
-- travelled distance;
+- travelled distance and planned-to-executed path-length ratio;
 - minimum front-sector clearance;
 - safety override count, override time, and override ratio.
 
@@ -505,6 +510,53 @@ ros2 launch robotics_sim sim.launch.py \
 ~~~
 
 The output path is optional and the `results/` directory is ignored by Git.
+
+`path_efficiency` is reported only for successful runs. For an incomplete
+run, the robot has not traversed the full planned route, so dividing the
+initial full-path length by partial travelled distance would produce a
+misleading value greater than one.
+
+The CSV also reports `path_length_ratio`, defined as
+
+$$
+\text{path\_length\_ratio}
+=
+\frac{L_{\text{travelled}}}{L_{\text{planned}}}
+$$
+
+The initial planned path is a grid polyline, while the executed trajectory is
+continuous and may cut across grid corners. Therefore the ratio can be below
+one without implying that the planner found a shorter discrete path; it mainly
+describes the difference between the rasterized reference and the smooth
+executed trajectory.
+
+Safety parameters can be overridden at launch time and are written into the
+CSV for traceability:
+
+~~~bash
+ros2 launch robotics_sim sim.launch.py \
+  minimum_clearance:=0.50 \
+  sensor_latency:=0.10 \
+  safety_margin:=0.15 \
+  recovery_timeout_s:=8.0 \
+  planning_radius_m:=0.35 \
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/closed_loop_metrics.csv
+~~~
+
+This makes parameter sweeps reproducible: each result row contains both the
+measured outcomes and the safety configuration that produced them.
+
+`planning_radius_m` controls the global planner's grid obstacle inflation.
+The default `0.35 m` represents the robot footprint plus discretization
+margin. When a larger safety clearance is required, increasing this value
+lets the planner search for a route that is compatible with the safety layer;
+otherwise the planner may produce a path that the supervisor must reject.
+
+The safety recovery also has a timeout. If the robot remains inside the
+blocked state longer than `recovery_timeout_s`, the supervisor stops with zero
+velocity and reports a recovery-timeout error. This is a fail-safe experiment
+termination condition for infeasible planner/safety combinations; it is not a
+replacement for replanning.
 
 ## 12. Current status and roadmap
 

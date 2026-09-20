@@ -2,6 +2,7 @@
 """Velocity safety layer based on a LiDAR stopping-distance envelope."""
 
 import math
+import time
 from typing import Optional
 
 import rclpy
@@ -32,6 +33,7 @@ class SafetySupervisor(Node):
         self.declare_parameter("front_angle_deg", 60.0)
         self.declare_parameter("side_inner_angle_deg", 30.0)
         self.declare_parameter("recovery_turn_speed", 0.60)
+        self.declare_parameter("recovery_timeout_s", 8.0)
         # Calibration for this Gazebo laser frame: a positive scan-side angle
         # maps to a negative base angular command in this model.
         self.declare_parameter("recovery_turn_sign", -1.0)
@@ -55,6 +57,9 @@ class SafetySupervisor(Node):
         )
         self.recovery_turn_speed = float(
             self.get_parameter("recovery_turn_speed").value
+        )
+        self.recovery_timeout = float(
+            self.get_parameter("recovery_timeout_s").value
         )
         self.recovery_turn_sign = float(
             self.get_parameter("recovery_turn_sign").value
@@ -96,6 +101,8 @@ class SafetySupervisor(Node):
         self.intervention_count = 0
         self.was_blocked = False
         self.recovery_turn = 0.0
+        self.recovery_started_at: Optional[float] = None
+        self.recovery_timeout_active = False
         self.tilt_stop_active = False
 
     def publish_stop(self) -> None:
@@ -269,10 +276,31 @@ class SafetySupervisor(Node):
             # Do not forward the path follower's angular command here: the
             # safety supervisor owns the command while the forward sector is
             # blocked.
+            if not self.was_blocked:
+                self.recovery_started_at = time.monotonic()
+                self.recovery_timeout_active = False
+
             safe_command = Twist()
-            safe_command.angular.z = self.recovery_turn
+            recovery_elapsed = (
+                0.0
+                if self.recovery_started_at is None
+                else time.monotonic() - self.recovery_started_at
+            )
+            recovery_timed_out = (
+                self.recovery_timeout > 0.0
+                and recovery_elapsed >= self.recovery_timeout
+            )
+            if not recovery_timed_out:
+                safe_command.angular.z = self.recovery_turn
             self.publisher.publish(safe_command)
             self.publish_override_state(True)
+            if recovery_timed_out and not self.recovery_timeout_active:
+                self.get_logger().error(
+                    "Safety recovery timeout: "
+                    f"blocked for {recovery_elapsed:.1f} s; "
+                    "holding zero velocity."
+                )
+                self.recovery_timeout_active = True
             if not self.was_blocked:
                 self.intervention_count += 1
                 observed = "unknown" if distance is None else f"{distance:.3f} m"
@@ -284,6 +312,8 @@ class SafetySupervisor(Node):
                 )
         else:
             self.recovery_turn = 0.0
+            self.recovery_started_at = None
+            self.recovery_timeout_active = False
             self.publisher.publish(raw)
             self.publish_override_state(False)
 
@@ -298,9 +328,11 @@ def main(args=None) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        node.publish_stop()
+        if rclpy.ok():
+            node.publish_stop()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":
