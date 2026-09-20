@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "robotics-planning-portfolio"
+version = "0.1.0"
+description = "Classical grid planning and sensor-aware safety research project"
+requires-python = ">=3.10"
+
+[tool.setuptools]
+packages = ["robotics_planning"]
+
