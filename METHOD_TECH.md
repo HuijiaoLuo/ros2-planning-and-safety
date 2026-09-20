@@ -569,6 +569,7 @@ changed:
 | --- | ---: | ---: | :---: | ---: | ---: | ---: | ---: | :---: |
 | Baseline | 0.50 m | 0.35 m | yes | 67.74 | 3.783 | 0.520 | 0.000 | false |
 | Mismatched constraints | 0.55 m | 0.35 m | no | -- | 0.536 | 0.538 | 0.658 | false |
+| Intermediate alignment | 0.55 m | 0.45 m | yes | 68.64 | 3.983 | 0.634 | 0.000 | false |
 | Aligned constraints | 0.55 m | 0.55 m | yes | 73.66 | 4.195 | 0.735 | 0.000 | false |
 
 The mismatched case demonstrates why the safety supervisor cannot be treated
@@ -576,7 +577,11 @@ as a substitute for planning: the planner generated a route that approached
 an obstacle more closely than the runtime safety threshold allowed. The
 supervisor prevented collision, but the robot could not complete the route
 before the recovery timeout. Increasing the planning radius produced a longer
-route, but restored feasibility and increased the measured clearance.
+route, but restored feasibility and increased the measured clearance. The
+intermediate run also shows that the relationship is quantized by the `0.10 m`
+occupancy-grid resolution: obstacle inflation is converted to an integer
+number of grid cells, so a small change in the continuous parameter may have
+no effect until it crosses the next cell boundary.
 
 ## 12. Current status and roadmap
 
