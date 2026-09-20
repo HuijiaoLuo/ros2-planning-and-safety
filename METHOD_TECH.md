@@ -162,23 +162,23 @@ $$
 Desired heading:
 
 $$
-\theta_g = \operatorname{atan2}(y_g-y, x_g-x)
+\theta_g = \mathrm{atan2}(y_g-y, x_g-x)
 $$
 
 Wrapped heading error:
 
 $$
-e_\theta = \operatorname{wrap}(\theta_g-\theta)
+e_\theta = \mathrm{wrap}(\theta_g-\theta)
 $$
 
 The proportional command is:
 
 $$
-v = \operatorname{clip}(K_d e_d, 0, v_{max})
+v = \mathrm{clip}(K_d e_d, 0, v_{max})
 $$
 
 $$
-\omega = \operatorname{clip}(K_\theta e_\theta,
+\omega = \mathrm{clip}(K_\theta e_\theta,
 -\omega_{max}, \omega_{max})
 $$
 
