@@ -17,6 +17,21 @@ The central question is:
 
 <p align="center"><sub>Gray: occupied cells · dashed blue: A* path · red: executed trajectory · cyan: robot · orange: goal. The overlay reports time, front clearance, and safety override state.</sub></p>
 
+### How to read the demo
+
+`front clearance` is the closest valid LiDAR return within `±60°` of the
+robot's forward direction. It is measured from the LiDAR origin to the first
+obstacle surface, not from the robot's outer body. In this simulation the
+LiDAR is centered in a `0.50 m`-long base, so for a flat wall directly ahead:
+
+```text
+approximate body-to-wall gap = displayed front clearance - 0.25 m
+```
+
+The safety supervisor compares this sensor measurement with the configured
+clearance threshold and the speed-dependent stopping envelope. See
+[`METHOD_TECH.md`](METHOD_TECH.md) for the complete measurement model.
+
 ## Current status
 
 The current milestone includes:
