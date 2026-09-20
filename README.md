@@ -112,6 +112,19 @@ python -m unittest discover -s tests -v
 
 The demo renders the explored cells and final path for each algorithm, followed by a benchmark table.
 
+## LiDAR debugging helper
+
+The repository includes a small ROS2 diagnostic script:
+
+```bash
+python3 tools/scan_debug.py
+```
+
+It subscribes once to `/scan` and reports the minimum finite range in three
+sectors: front `+/-60°`, left `30°..90°`, and right `-90°..-30°`. The script
+only observes sensor data; it does not publish velocity commands or modify the
+simulation.
+
 ## C++ planning core
 
 The C++17 implementation is under `cpp/`. It uses a flat cell-indexed grid so the data layout can later be reused by OpenMP or CUDA kernels.
@@ -187,9 +200,14 @@ and LiDAR data are available. Start the first simulation with:
 ros2 launch robotics_sim sim.launch.py
 ```
 
-This launches Gazebo, bridges `/cmd_vel`, `/odom`, `/wheel_odom`, and `/scan`, and starts the
-two control nodes. The world contains one obstacle directly along the initial
-goal direction so the safety stop can be observed.
+This launches Gazebo, bridges `/cmd_vel`, `/odom`, `/wheel_odom`, and `/scan`,
+and starts the map publisher, A* planner, path follower, and safety supervisor.
+The world contains one obstacle directly along the initial goal direction so
+the safety stop can be observed.
+
+The green goal marker is visible in Gazebo but is excluded from the LiDAR
+visibility mask. This prevents a visualization-only object from being treated
+as a physical obstacle.
 
 The planner output is now connected to `path_follower`. The direct
 `waypoint_controller` remains available as a baseline, but is not started by the
@@ -197,6 +215,12 @@ default bringup launch.
 
 The detailed method, data flow, equations, and validation protocol are documented
 in [METHOD_TECH.md](METHOD_TECH.md).
+
+## Continuous integration
+
+GitHub Actions runs on every push and pull request. The workflow installs the
+Python package and runs the Python unit tests, then configures and builds the
+C++17 targets and runs CTest.
 
 ## ROS2 architecture
 
@@ -220,9 +244,9 @@ $$
 d_{stop} = \frac{v^2}{2a_{max}} + v\tau + d_{margin}
 $$
 
-It also applies a `0.35 m` minimum clearance aligned with the planner's inflated
-robot radius, plus a hysteresis band to
-avoid stop/release chatter near the threshold. When forward motion is blocked,
+It also applies a `0.50 m` minimum clearance and a `0.03 m` hysteresis band to
+avoid stop/release chatter near the threshold. The planner separately inflates
+obstacles using a `0.35 m` robot-radius parameter. When forward motion is blocked,
 it owns the recovery direction for the duration of the blocked state. It
 selects the side with more
 measured LiDAR clearance, even if the path follower requests the opposite
@@ -310,6 +334,10 @@ exceeds `10°`, preventing a tipped robot from continuing to receive commands.
 │           ├── worlds/
 │           ├── package.xml
 │           └── setup.py
+├── tools/
+│   └── scan_debug.py
+├── .github/
+│   └── workflows/ci.yml
 └── tests/
     └── test_planners.py
 ```
