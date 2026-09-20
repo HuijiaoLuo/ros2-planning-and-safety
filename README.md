@@ -2,342 +2,116 @@
 
 [![CI](https://github.com/HuijiaoLuo/ros2-planning-and-safety/actions/workflows/ci.yml/badge.svg)](https://github.com/HuijiaoLuo/ros2-planning-and-safety/actions/workflows/ci.yml)
 
-An incremental robotics portfolio project built around a differential-drive mobile robot.
+A robotics portfolio project that connects classical path planning with a
+simulated differential-drive robot.
 
 The central question is:
 
-> How should a robot turn a map and imperfect sensor measurements into safe motion commands?
+> How should a robot turn map and sensor measurements into safe motion commands?
 
-The project connects classical algorithms, robot motion, ROS2 integration, and quantitative validation.
+## Current status
 
-## System idea
+The current milestone includes:
+
+- Python and C++ implementations of DFS, BFS, Dijkstra, Greedy Best-First, and A*;
+- path, runtime, and expanded-node benchmarks;
+- a ROS2 Jazzy + Gazebo differential-drive simulation;
+- occupancy-grid A* planning and `nav_msgs/Path` publishing;
+- path following through `/cmd_vel_raw`;
+- LiDAR-based safety supervision through `/cmd_vel`;
+- physics-informed stopping distance, clearance hysteresis, and recovery turning;
+- Python unit tests, C++ tests, and GitHub Actions CI.
+
+The robot has been tested in simulation from the start position to the goal at
+approximately `(2.0, 0.0)`, with a final position error within the configured
+`0.05 m` tolerance.
+
+## System architecture
 
 ```text
-occupancy grid
-      ↓
-global path planner
-      ↓
-geometric path
-      ↓
-path follower
-      ↓
-raw velocity command
-      ↓
-sensor-aware safety supervisor
-      ↓
-safe velocity command
+/map
+  ↓
+global_planner (A*)
+  ↓ /plan
+path_follower
+  ↓ /cmd_vel_raw
+safety_supervisor ← /scan, /odom
+  ↓ /cmd_vel
+Gazebo differential-drive robot
 ```
 
-The architecture separates three responsibilities:
+The green goal marker is visible in Gazebo but excluded from the LiDAR
+visibility mask, so it is not treated as a physical obstacle.
 
-- The planner decides where the robot should go.
-- The path follower converts a path into $(v, \omega)$ commands.
-- The safety supervisor can override unsafe commands using LiDAR and stopping-distance estimates.
+## Quick start
 
-## Current implementation
-
-The current milestones are a standalone planning core and the first ROS2 control layer.
-
-The planning core is implemented in both Python and C++:
-
-- BFS
-- Dijkstra
-- Greedy Best-First Search
-- A*
-- DFS with backtracking
-- path reconstruction through parent pointers
-- weighted grid costs
-- expanded-node and runtime benchmarks
-
-- ROS2 package `robotics_nav` contains the map publisher, A* global planner,
-  path follower, and sensor-aware safety supervisor.
-- Gazebo integration provides ground-truth `/odom`, wheel `/wheel_odom`, and
-  `/scan` through `ros_gz_bridge`.
-- The first path-following configuration uses a `0.10 m` lookahead and a
-  `0.20 m/s` speed limit. It also scales forward speed with heading error and
-  rotates in place for errors above `30°` to reduce corner cutting near
-  inflated obstacles. The follower also advances through the ordered path
-  prefix instead of selecting a geometrically nearer point beyond a detour.
-  Within `0.60 m` of the final goal, it switches to a damped final-approach
-  controller that tracks the endpoint directly, limits angular speed to
-  `0.60 rad/s`, and applies a small heading deadband.
-
-## Search algorithms
-
-For a 4-neighbor grid, the default A* heuristic is Manhattan distance:
-
-$$
-h(n) = |x - x_g| + |y - y_g|
-$$
-
-A* evaluates:
-
-$$
-f(n) = g(n) + h(n)
-$$
-
-where $g(n)$ is the cost already paid and $h(n)$ estimates the remaining cost.
-
-- BFS is optimal for equal edge costs.
-- Dijkstra is the weighted shortest-path baseline.
-- Greedy Best-First Search uses only $h(n)$ and is not generally optimal.
-- A* is optimal when the heuristic is admissible under the usual graph-search assumptions.
-- Dijkstra is A* with $h(n) = 0$.
-
-With a binary heap, Dijkstra and A* have worst-case complexity:
-
-$$
-O((V + E)\log V)
-$$
-
-On a regular grid, $E$ is proportional to $V$, giving approximately $O(V\log V)$.
-
-## Setup
-
-The standard Conda workflow is:
+### Python planning core
 
 ```bash
 conda env create -f environment.yml
 conda activate robotics-portfolio
-```
 
-The environment pins Python 3.11. No editable package installation is required when running from the repository root.
-
-## Python demo
-
-```bash
 python -m robotics_planning.demo
 python -m unittest discover -s tests -v
 ```
 
-The demo renders the explored cells and final path for each algorithm, followed by a benchmark table.
-
-## LiDAR debugging helper
-
-The repository includes a small ROS2 diagnostic script:
-
-```bash
-python3 tools/scan_debug.py
-```
-
-It subscribes once to `/scan` and reports the minimum finite range in three
-sectors: front `+/-60°`, left `30°..90°`, and right `-90°..-30°`. The script
-only observes sensor data; it does not publish velocity commands or modify the
-simulation.
-
-## C++ planning core
-
-The C++17 implementation is under `cpp/`. It uses a flat cell-indexed grid so the data layout can later be reused by OpenMP or CUDA kernels.
-
-Build with CMake and the Visual Studio generator:
+### C++ planning core
 
 ```bash
 cmake -S cpp -B cpp/build
 cmake --build cpp/build --config Release
 ctest --test-dir cpp/build -C Release --output-on-failure
-```
-
-Run the demo:
-
-```bash
 ./cpp/build/Release/planning_demo.exe
 ```
 
-The OpenMP option is reserved for future kernels:
+### ROS2 simulation in WSL2
+
+ROS2 Jazzy and Gazebo Harmonic are installed in WSL2 Ubuntu. In a WSL2
+terminal:
 
 ```bash
-cmake -S cpp -B cpp/build-openmp \
-  -DROBOTICS_PLANNING_ENABLE_OPENMP=ON
-cmake --build cpp/build-openmp --config Release
-```
-
-The current search kernels remain serial. A single A* search has frontier-ordering dependencies, so useful first parallel targets include:
-
-- batches of independent map queries;
-- Monte Carlo noise and latency experiments;
-- wavefront-style BFS;
-- GPU-friendly cost propagation.
-
-## ROS2 environment and first package
-
-ROS2 Jazzy and Gazebo Harmonic are installed natively inside WSL2 Ubuntu 24.04. The
-Windows Conda environment is intentionally not used by ROS2.
-
-Load ROS2 in each new WSL terminal:
-
-```bash
+cd /mnt/e/HPC_simulation_porfolio/Robotics/ros2_ws
 source /opt/ros/jazzy/setup.bash
-```
-
-Build the ROS2 workspace from the repository root:
-
-```bash
-cd ros2_ws
 colcon build --symlink-install
 source install/setup.bash
-```
-
-The first packages are deliberately small. They contain:
-
-- `path_follower`: `/plan` plus `/odom` to `/cmd_vel_raw`;
-- `waypoint_controller`: direct-goal baseline kept for comparison;
-- `safety_supervisor`: `/scan` plus `/cmd_vel_raw` to `/cmd_vel`;
-- `static_map_publisher`: deterministic `nav_msgs/OccupancyGrid` on `/map`;
-- `global_planner`: A* over `/map` and `/odom`, publishing `/plan`;
-- `robotics_sim`: a Gazebo Harmonic world, differential-drive robot, obstacle,
-  ground-truth `/odom`, wheel `/wheel_odom`, and ROS-Gazebo bridge.
-
-Run the package after building:
-
-```bash
-ros2 launch robotics_nav bringup.launch.py
-```
-
-The controller and safety nodes will hold the robot stopped until both odometry
-and LiDAR data are available. Start the first simulation with:
-
-```bash
 ros2 launch robotics_sim sim.launch.py
 ```
 
-This launches Gazebo, bridges `/cmd_vel`, `/odom`, `/wheel_odom`, and `/scan`,
-and starts the map publisher, A* planner, path follower, and safety supervisor.
-The world contains one obstacle directly along the initial goal direction so
-the safety stop can be observed.
+In another WSL2 terminal, the LiDAR diagnostic helper can be run with:
 
-The green goal marker is visible in Gazebo but is excluded from the LiDAR
-visibility mask. This prevents a visualization-only object from being treated
-as a physical obstacle.
-
-The planner output is now connected to `path_follower`. The direct
-`waypoint_controller` remains available as a baseline, but is not started by the
-default bringup launch.
-
-The detailed method, data flow, equations, and validation protocol are documented
-in [METHOD_TECH.md](METHOD_TECH.md).
-
-## Continuous integration
-
-GitHub Actions runs on every push and pull request. The workflow installs the
-Python package and runs the Python unit tests, then configures and builds the
-C++17 targets and runs CTest.
-
-## ROS2 architecture
-
-```text
-/map
-  ↓
-global_planner  →  nav_msgs/Path
-                         ↓
-                    path_follower
-                         ↓
-                    /cmd_vel_raw
-                         ↓
-               safety_supervisor  ←  /scan
-                         ↓
-                      /cmd_vel
+```bash
+cd /mnt/e/HPC_simulation_porfolio/Robotics
+source /opt/ros/jazzy/setup.bash
+source ros2_ws/install/setup.bash
+python3 tools/scan_debug.py
 ```
 
-The safety layer uses a speed-dependent stopping-distance envelope:
+`scan_debug.py` only reads `/scan` and reports minimum front, left, and right
+sector distances. It does not publish commands or modify the simulation.
 
-$$
-d_{stop} = \frac{v^2}{2a_{max}} + v\tau + d_{margin}
-$$
-
-It also applies a `0.50 m` minimum clearance and a `0.03 m` hysteresis band to
-avoid stop/release chatter near the threshold. The planner separately inflates
-obstacles using a `0.35 m` robot-radius parameter. When forward motion is blocked,
-it owns the recovery direction for the duration of the blocked state. It
-selects the side with more
-measured LiDAR clearance, even if the path follower requests the opposite
-turn, and holds that direction until the front clearance exceeds the release
-threshold. The safety layer owns the angular command for the complete blocked
-episode; it does not forward a competing path-follower turn. Later experiments will compare this layer with noisy sensors, control
-latency, and wheel-odometry drift. When
-the path follower intentionally commands pure rotation (`linear.x=0`) during a
-blocked episode, the safety layer keeps ownership of the recovery turn. In the
-simulation MVP, it also stops if the estimated roll or pitch
-exceeds `10°`, preventing a tipped robot from continuing to receive commands.
-
-## Roadmap
-
-### V0 — Ideal motion
-
-- unicycle/differential-drive kinematics;
-- waypoint and path following;
-- known pose and known goal.
-
-### V1 — Classical planning
-
-- occupancy grid;
-- BFS, Dijkstra, Greedy, A*;
-- same-map benchmark and visualization.
-
-### V2 — ROS2/Gazebo integration
-
-- `/map`, `/odom`, `/scan`;
-- custom waypoint controller and safety supervisor;
-- `nav_msgs/Path`;
-- differential-drive simulation.
-
-### V3 — Sensor-aware safety
-
-- LiDAR safety supervisor;
-- fixed threshold versus physics-informed stopping distance;
-- minimum clearance and collision metrics;
-- reactive side-clearance recovery.
-
-### V4 — Validation under uncertainty
-
-- LiDAR noise;
-- odometry drift;
-- control latency;
-- actuator saturation;
-- Monte Carlo evaluation.
-
-### V5 — Extensions
-
-- richer reactive obstacle avoidance and local planning;
-- IMU and wheel-odometry fusion;
-- SLAM;
-- Nav2;
-- camera-based safety events.
-
-## Repository structure
+## Repository layout
 
 ```text
-.
-├── README.md
-├── environment.yml
-├── pyproject.toml
-├── robotics_planning/
-│   ├── grid.py
-│   ├── planners.py
-│   ├── benchmark.py
-│   └── demo.py
-├── cpp/
-│   ├── CMakeLists.txt
-│   ├── include/robotics_planning/
-│   ├── src/
-│   ├── apps/
-│   └── tests/
-├── ros2_ws/
-│   └── src/
-│       ├── robotics_nav/
-│       │   ├── launch/
-│       │   ├── robotics_nav/
-│       │   ├── package.xml
-│       │   └── setup.py
-│       └── robotics_sim/
-│           ├── launch/
-│           ├── robotics_sim/
-│           ├── worlds/
-│           ├── package.xml
-│           └── setup.py
-├── tools/
-│   └── scan_debug.py
-├── .github/
-│   └── workflows/ci.yml
-└── tests/
-    └── test_planners.py
+robotics_planning/     Python planners and benchmarks
+cpp/                   C++17 planners, demo, and tests
+ros2_ws/src/          ROS2 navigation and simulation packages
+tools/                Diagnostic scripts
+tests/                Python unit tests
+.github/workflows/    GitHub Actions CI
+METHOD_TECH.md        Detailed methods, equations, diagnostics, and roadmap
 ```
+
+## Documentation
+
+See [METHOD_TECH.md](METHOD_TECH.md) for:
+
+- differential-drive and controller equations;
+- planner and safety-supervisor logic;
+- ROS2 topic flow and launch sequence;
+- parameter meanings and validation protocol;
+- current limitations and the roadmap toward uncertainty, HPC, SLAM, Nav2,
+  and vision.
+
+## License
+
+This project is released under the [Apache License 2.0](LICENSE).

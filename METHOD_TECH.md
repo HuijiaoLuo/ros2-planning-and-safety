@@ -269,8 +269,9 @@ d_front > max(d_stop, d_min)
 ~~~
 
 The current supervisor uses a `±60°` forward sector and a hard minimum
-clearance of `0.35 m`, matching the planner's inflated robot radius, in addition
-to the speed-dependent stopping envelope.
+clearance of `0.50 m` in addition to the speed-dependent stopping envelope.
+The planner separately uses a `0.35 m` robot-radius parameter when inflating
+obstacles on the occupancy grid.
 It also uses a `0.03 m` hysteresis band when releasing a stop, so a scan that
 oscillates around the threshold does not repeatedly toggle the command.
 When forward motion is blocked, it sets `linear.x=0` and selects one angular
@@ -420,20 +421,30 @@ The first validation questions are:
 
 Only after these answers are positive should we tune gains or add a planner.
 
-## 12. What is intentionally not implemented yet
+## 12. Current status and roadmap
 
-The following are future layers, not hidden assumptions:
+The current ROS2 milestone includes:
 
-- /map and occupancy-grid planning inside ROS2;
-- publishing nav_msgs/Path from BFS, Dijkstra, or A*;
-- path following instead of direct waypoint control;
-- wheel slip and actuator dynamics, measured by comparing `/wheel_odom` with `/odom`;
-- LiDAR noise and odometry drift;
-- IMU fusion and covariance handling;
-- SLAM and Nav2;
-- camera-based safety events.
+- a deterministic occupancy-grid publisher;
+- an A* global planner publishing `nav_msgs/Path`;
+- ordered path following for the differential-drive robot;
+- LiDAR-based safety supervision with a speed-dependent stopping envelope;
+- clearance hysteresis, latched recovery turning, and a tilt guard;
+- a Gazebo goal marker that remains visible but is excluded from the LiDAR mask.
 
-This ordering keeps each experiment interpretable. If the robot stops too early, we can inspect the LiDAR measurement, stopping-distance calculation, and command velocity separately instead of debugging a complete autonomous stack at once.
+The next layers are intentionally separated so that each experiment remains
+interpretable:
+
+- V3: richer reactive obstacle avoidance and local planning;
+- V4: LiDAR noise, odometry drift, actuator saturation, and control latency;
+- V5: Monte Carlo validation of collision rate, clearance, and intervention count;
+- V6: IMU and wheel-odometry fusion with covariance handling;
+- V7: SLAM and Nav2 integration;
+- V8: camera-based safety events and perception/sensor fusion.
+
+If the robot stops too early, we can inspect the LiDAR measurement,
+stopping-distance calculation, and command velocity separately instead of
+debugging a complete autonomous stack at once.
 
 ## 13. Future HPC connection
 
