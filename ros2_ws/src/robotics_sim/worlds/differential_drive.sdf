@@ -14,6 +14,7 @@
     <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
       <render_engine>ogre2</render_engine>
     </plugin>
+    <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
 
     <!-- Keep the world self-contained instead of depending on Gazebo model URIs. -->
     <model name="ground_plane">
@@ -186,6 +187,17 @@
           </ray>
           <always_on>true</always_on>
           <visualize>true</visualize>
+        </sensor>
+
+        <!-- Publish physical contacts for evaluation; this collision covers
+             the robot body without counting normal wheel-ground contact. -->
+        <sensor name="contact_sensor" type="contact">
+          <topic>/collision/contacts</topic>
+          <update_rate>30</update_rate>
+          <always_on>true</always_on>
+          <contact>
+            <collision>base_collision</collision>
+          </contact>
         </sensor>
       </link>
 

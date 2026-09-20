@@ -12,6 +12,7 @@
   <depend>launch_ros</depend>
   <depend>robotics_nav</depend>
   <depend>ros_gz_bridge</depend>
+  <depend>ros_gz_interfaces</depend>
 
   <export>
     <build_type>ament_python</build_type>

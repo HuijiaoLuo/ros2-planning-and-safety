@@ -21,6 +21,7 @@ from rclpy.qos import (
     qos_profile_sensor_data,
 )
 from sensor_msgs.msg import LaserScan
+from ros_gz_interfaces.msg import Contacts
 from std_msgs.msg import Bool
 
 
@@ -38,7 +39,7 @@ class EvaluationLogger(Node):
         self.declare_parameter("front_angle_deg", 60.0)
         self.declare_parameter("sample_rate_hz", 20.0)
         self.declare_parameter("output_path", "")
-        self.declare_parameter("collision_topic", "/collision")
+        self.declare_parameter("collision_topic", "/collision/contacts")
         self.declare_parameter("safety_override_topic", "/safety_override")
 
         self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
@@ -47,7 +48,7 @@ class EvaluationLogger(Node):
         )
         sample_rate = float(self.get_parameter("sample_rate_hz").value)
         self.output_path = str(self.get_parameter("output_path").value)
-        collision_topic = str(self.get_parameter("collision_topic").value)
+        self.collision_topic = str(self.get_parameter("collision_topic").value)
         safety_override_topic = str(
             self.get_parameter("safety_override_topic").value
         )
@@ -112,8 +113,8 @@ class EvaluationLogger(Node):
             10,
         )
         self.create_subscription(
-            Bool,
-            collision_topic,
+            Contacts,
+            self.collision_topic,
             self.collision_callback,
             10,
         )
@@ -150,8 +151,8 @@ class EvaluationLogger(Node):
     def override_state_callback(self, message: Bool) -> None:
         self.latest_override_state = bool(message.data)
 
-    def collision_callback(self, message: Bool) -> None:
-        self.collision_state = bool(message.data)
+    def collision_callback(self, message: Contacts) -> None:
+        self.collision_state = bool(message.contacts)
 
     def front_clearance(self, scan: LaserScan) -> Optional[float]:
         if scan.angle_increment == 0.0:
@@ -202,6 +203,16 @@ class EvaluationLogger(Node):
             clearance = self.front_clearance(self.latest_scan)
             if clearance is not None:
                 self.minimum_clearance = min(self.minimum_clearance, clearance)
+
+        # The Gazebo contact sensor publishes only when a contact event is
+        # present. If the bridge publisher exists but no event has arrived,
+        # interpret that as a verified collision-free state. Keep `unknown`
+        # only for runs where the collision topic is genuinely unavailable.
+        if (
+            self.collision_state is None
+            and self.count_publishers(self.collision_topic) > 0
+        ):
+            self.collision_state = False
 
         if self.latest_raw_command is not None:
             raw_is_active = (

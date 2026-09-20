@@ -466,8 +466,8 @@ of the source baseline.
 ### Closed-loop evaluation logger
 
 `evaluation_logger` is a read-only ROS2 node. It subscribes to `/odom`,
-`/plan`, `/scan`, `/cmd_vel_raw`, and `/safety_override`, and samples the run
-at a fixed rate. It measures:
+`/plan`, `/scan`, `/cmd_vel_raw`, `/safety_override`, and
+`/collision/contacts`, and samples the run at a fixed rate. It measures:
 
 - start and goal positions;
 - final position error and goal success;
@@ -483,9 +483,12 @@ the latest `/cmd_vel_raw` and `/cmd_vel` messages, because `Twist` messages do
 not contain timestamps and asynchronous callbacks can otherwise create false
 override events.
 
-Collision is reported as `unknown` unless a Boolean message is available on
-the optional `/collision` topic. This avoids presenting a clearance estimate
-as a collision detector. The logger never publishes velocity commands.
+The Gazebo world publishes contact messages on `/collision/contacts`. The
+logger reports `collision: true` when the contact array is non-empty and
+`collision: false` when the bridge publisher exists but no contact event has
+arrived. If the topic is not available in another simulation, the result
+remains `unknown`. This keeps clearance and collision as separate
+measurements. The logger never publishes velocity commands.
 
 The logger is included in the default simulation launch. To print the summary
 only:

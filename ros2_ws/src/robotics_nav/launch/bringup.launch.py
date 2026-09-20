@@ -12,6 +12,11 @@ def generate_launch_description():
                 default_value="",
                 description="Optional CSV path for closed-loop evaluation metrics.",
             ),
+            DeclareLaunchArgument(
+                "collision_topic",
+                default_value="/collision/contacts",
+                description="ROS topic carrying Gazebo contact messages.",
+            ),
             Node(
                 package="robotics_nav",
                 executable="path_follower",
@@ -81,6 +86,7 @@ def generate_launch_description():
                         "front_angle_deg": 60.0,
                         "sample_rate_hz": 20.0,
                         "output_path": LaunchConfiguration("evaluation_output"),
+                        "collision_topic": LaunchConfiguration("collision_topic"),
                     }
                 ],
             ),

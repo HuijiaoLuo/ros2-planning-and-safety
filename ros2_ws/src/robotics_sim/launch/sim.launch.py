@@ -14,6 +14,7 @@ def generate_launch_description():
     world_path = os.path.join(sim_share, "worlds", "differential_drive.sdf")
     nav_launch_path = os.path.join(nav_share, "launch", "bringup.launch.py")
     evaluation_output = LaunchConfiguration("evaluation_output")
+    collision_topic = LaunchConfiguration("collision_topic")
 
     return LaunchDescription(
         [
@@ -21,6 +22,11 @@ def generate_launch_description():
                 "evaluation_output",
                 default_value="",
                 description="Optional CSV path for closed-loop evaluation metrics.",
+            ),
+            DeclareLaunchArgument(
+                "collision_topic",
+                default_value="/collision/contacts",
+                description="ROS topic carrying Gazebo contact messages.",
             ),
             ExecuteProcess(
                 cmd=["gz", "sim", "-r", world_path],
@@ -35,6 +41,7 @@ def generate_launch_description():
                     "/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
                     "/wheel_odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
                     "/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
+                    "/collision/contacts@ros_gz_interfaces/msg/Contacts[gz.msgs.Contacts",
                 ],
                 output="screen",
             ),
@@ -42,6 +49,7 @@ def generate_launch_description():
                 PythonLaunchDescriptionSource(nav_launch_path),
                 launch_arguments={
                     "evaluation_output": evaluation_output,
+                    "collision_topic": collision_topic,
                 }.items(),
             ),
         ]
