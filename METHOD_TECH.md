@@ -565,10 +565,27 @@ The following runs use the same world, start pose, goal, and controller. Only
 the minimum safety clearance and the planner's obstacle-inflation radius are
 changed:
 
-| Case | Minimum clearance | Planning radius | Success | Time to goal (s) | Travelled (m) | Minimum measured clearance (m) | Safety override ratio | Collision |
+The result columns are defined as follows:
+
+| Column | Meaning |
+| --- | --- |
+| `case` | Short label for the experiment configuration. |
+| `minimum_clearance` | Configured LiDAR distance threshold used by the safety supervisor. |
+| `planning_radius_m` | Configured obstacle-inflation radius used by the A* planner. |
+| `success` | Whether the robot reached the goal within the goal tolerance. |
+| `time_to_goal_s` | Time from the first odometry sample to goal arrival. |
+| `travelled_distance_m` | Distance accumulated from the odometry trajectory. |
+| `minimum_clearance_m` | Smallest valid LiDAR return in the forward sector during the run. |
+| `safety_override_ratio` | Safety-override time divided by motion time. |
+| `collision` | Contact-sensor result reported by the evaluation logger. |
+
+The comparison results are:
+
+| Case | `minimum_clearance` | `planning_radius_m` | `success` | `time_to_goal_s` | `travelled_distance_m` | `minimum_clearance_m` | `safety_override_ratio` | `collision` |
 | --- | ---: | ---: | :---: | ---: | ---: | ---: | ---: | :---: |
 | Baseline | 0.50 m | 0.35 m | yes | 67.74 | 3.783 | 0.520 | 0.000 | false |
 | Mismatched constraints | 0.55 m | 0.35 m | no | -- | 0.536 | 0.538 | 0.658 | false |
+| Cell-boundary test | 0.55 m | 0.40 m | no | -- | 0.497 | 0.537 | 0.688 | false |
 | Intermediate alignment | 0.55 m | 0.45 m | yes | 68.64 | 3.983 | 0.634 | 0.000 | false |
 | Aligned constraints | 0.55 m | 0.55 m | yes | 73.66 | 4.195 | 0.735 | 0.000 | false |
 
