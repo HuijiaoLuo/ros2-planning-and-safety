@@ -498,16 +498,16 @@ measurements. The logger never publishes velocity commands.
 The logger is included in the default simulation launch. To print the summary
 only:
 
-~~~bash
+```bash
 ros2 launch robotics_sim sim.launch.py
-~~~
+```
 
 To additionally write one CSV row when the launch is stopped:
 
-~~~bash
+```bash
 ros2 launch robotics_sim sim.launch.py \
   evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/closed_loop_metrics.csv
-~~~
+```
 
 The output path is optional and the `results/` directory is ignored by Git.
 
@@ -530,10 +530,12 @@ one without implying that the planner found a shorter discrete path; it mainly
 describes the difference between the rasterized reference and the smooth
 executed trajectory.
 
+### Reproducible safety configuration
+
 Safety parameters can be overridden at launch time and are written into the
 CSV for traceability:
 
-~~~bash
+```bash
 ros2 launch robotics_sim sim.launch.py \
   minimum_clearance:=0.50 \
   sensor_latency:=0.10 \
@@ -541,7 +543,7 @@ ros2 launch robotics_sim sim.launch.py \
   recovery_timeout_s:=8.0 \
   planning_radius_m:=0.35 \
   evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/closed_loop_metrics.csv
-~~~
+```
 
 This makes parameter sweeps reproducible: each result row contains both the
 measured outcomes and the safety configuration that produced them.
