@@ -12,9 +12,10 @@ The project is deliberately incremental. At each stage, one new uncertainty is a
 V2 is the validated baseline: navigation uses `/odom`, while the safety layer
 uses physical LiDAR measurements and all evaluation results are recorded with
 their launch-time configuration. V3 evaluates wheel/IMU state estimation
-against `/odom` without feeding `/odom` into the estimator. V4 adds a gated
-LiDAR-to-map diagnostic, but its corrected pose is not yet a validated control
-input.
+against `/odom` without feeding `/odom` into the estimator. V4 currently has
+two explicit layers: V4.0 is the gated LiDAR-to-map diagnostic, while V4.1 is
+the new covariance-aware pose EKF. Neither corrected pose is yet a validated
+control input.
 
 ## 1. Problem definition
 
@@ -415,6 +416,82 @@ This checkpoint is intentionally conservative: a run is counted as physically
 successful only when the ground-truth evaluation pose reaches the goal. A
 controller reaching a tolerance using an estimated pose is reported separately
 because it can terminate early while the physical robot is still displaced.
+
+### 4.5 V4.1 covariance-aware pose EKF
+
+The V3 adaptive heading filter estimates only heading and gyro bias. V4.1
+extends the state to planar pose and gyro bias:
+
+$$
+\mathbf{x}_{k} = [x_{k},y_{k},\theta_{k},b_{g,k}]^{\mathsf{T}}
+$$
+
+The EKF predicts with wheel forward speed and bias-corrected gyro rate:
+
+$$
+\omega_{k} = \omega_{z,k} - b_{g,k}
+$$
+
+Its covariance follows the linearized process model:
+
+$$
+P_{k+1}^{-} = F_{k}P_{k}F_{k}^{\mathsf{T}} + Q_{k}
+$$
+
+The process covariance $Q_k$ includes configured gyro-rate noise, wheel-speed
+noise, and gyro-bias random walk. Wheel yaw is the first V4 measurement:
+
+$$
+\nu_{k} = \mathrm{wrap}(\theta_{k}^{\mathrm{wheel}} - \theta_{k}^{-})
+$$
+
+$$
+S_{k} = P_{\theta\theta,k}^{-} + R_{\mathrm{wheel}}
+$$
+
+$$
+K_{k} = P_{k}^{-}H^{\mathsf{T}}S_{k}^{-1}
+$$
+
+The filter also reports the normalized innovation squared:
+
+$$
+\mathrm{NIS}_{k} = \frac{\nu_{k}^{2}}{S_{k}}
+$$
+
+When `nis_gate_threshold` is positive, a wheel-yaw update with NIS above that
+threshold is rejected. The default `9.0` is a transparent approximately
+three-sigma gate for this scalar measurement. It is an integrity check, not a
+replacement for a complete sensor fault model.
+
+`fusion_mode:=ekf` publishes the EKF pose through the existing
+`/state_estimate` interface and places the x/y/yaw covariance in the standard
+`nav_msgs/Odometry` pose covariance field. Additional diagnostics are
+`/heading_fusion_nis` and `/heading_measurement_accepted`. The estimator uses
+`/wheel_odom` and IMU angular velocity only; `/odom` remains evaluation-only.
+
+The first V4 smoke test keeps navigation on `/odom`:
+
+```bash
+ros2 launch robotics_sim sim.launch.py \
+  navigation_pose_topic:=/odom \
+  fusion_mode:=ekf \
+  position_mode:=propagated \
+  wheel_slip_ratio:=0.0 \
+  imu_gyro_bias_rad_s:=0.0 \
+  imu_gyro_noise_std_rad_s:=0.0 \
+  wheel_speed_noise_std_m_s:=0.02 \
+  nis_gate_threshold:=9.0 \
+  planning_radius_m:=0.41 \
+  experiment_timeout_s:=120.0 \
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v4_ekf_smoke_eval.csv \
+  estimation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v4_ekf_smoke_metrics.csv
+```
+
+The next comparisons should vary one uncertainty at a time: zero slip versus
+`wheel_slip_ratio:=0.10`, then seeded gyro bias/noise. Closed-loop navigation
+with `/state_estimate` remains blocked until the physical `/odom` result and
+the EKF covariance/innovation diagnostics are understood.
 
 ## 5. Waypoint controller
 
@@ -1190,14 +1267,18 @@ The current ROS2 milestone includes:
 - an evaluation-only V3 logger reporting wheel and estimated pose RMSE against `/odom`;
 - configurable, seeded gyro bias and white-noise perturbations for V3 diagnostics;
 - an estimator-summary tool that groups runs by uncertainty configuration;
+- a V4.1 four-state pose EKF with covariance propagation, NIS gating, and
+  measurement-acceptance diagnostics;
 - a Gazebo goal marker that remains visible but is excluded from the LiDAR mask.
 
 The next layers are intentionally separated so that each experiment remains
 interpretable:
 
-- V3 next: multi-seed gyro uncertainty sweeps, wheel-slip perturbation, and
-  differential-drive propagation for estimated `x`, `y`, and `theta`;
-- V4: covariance-aware EKF and comparison with the transparent estimator;
+- V3: transparent wheel/IMU uncertainty experiments and diagnostic local
+  LiDAR-map matching;
+- V4.0: gated LiDAR-map correction remains diagnostic-only;
+- V4.1: covariance-aware pose EKF and comparison with the transparent
+  estimator;
 - V5: Monte Carlo validation of localization-to-safety failure propagation;
 - V6: SLAM and Nav2 integration;
 - V7: camera-based safety events and perception/sensor fusion.

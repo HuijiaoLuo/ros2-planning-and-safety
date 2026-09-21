@@ -31,6 +31,8 @@ CONFIG_FIELDS = (
     "configured_wheel_yaw_noise_min_std_rad",
     "configured_wheel_yaw_noise_max_std_rad",
     "configured_wheel_noise_adaptation_rate",
+    "configured_wheel_speed_noise_std_m_s",
+    "configured_nis_gate_threshold",
 )
 
 REQUIRED_CONFIG_FIELDS = CONFIG_FIELDS[:2]
@@ -53,6 +55,9 @@ OUTPUT_FIELDS = (
     "mean_estimate_final_heading_error_rad",
     "mean_adaptive_wheel_yaw_noise_std_rad",
     "mean_final_wheel_yaw_noise_estimate_std_rad",
+    "mean_nis",
+    "max_nis",
+    "mean_wheel_measurement_rejection_count",
 )
 
 METRIC_FIELDS = (
@@ -119,6 +124,10 @@ def normalized_config(row: dict[str, str]) -> tuple[object, ...]:
             value = 0.20
         if value is None and name == "configured_wheel_noise_adaptation_rate":
             value = 0.05
+        if value is None and name == "configured_wheel_speed_noise_std_m_s":
+            value = 0.02
+        if value is None and name == "configured_nis_gate_threshold":
+            value = 9.0
         if value is None:
             raise ValueError(f"Missing required configuration field: {name}")
         values.append(round(value, 9))
@@ -184,6 +193,14 @@ def summary_for_rows(rows: list[dict[str, str]]) -> dict[str, object]:
     )
     summary["mean_final_wheel_yaw_noise_estimate_std_rad"] = (
         mean(final_noise_values) if final_noise_values else None
+    )
+    nis_values = values_for(rows, "nis_mean")
+    max_nis_values = values_for(rows, "nis_max")
+    rejection_values = values_for(rows, "wheel_measurement_rejection_count")
+    summary["mean_nis"] = mean(nis_values) if nis_values else None
+    summary["max_nis"] = max(max_nis_values) if max_nis_values else None
+    summary["mean_wheel_measurement_rejection_count"] = (
+        mean(rejection_values) if rejection_values else None
     )
     return summary
 
@@ -251,6 +268,9 @@ def print_summary(summaries: list[dict[str, object]]) -> None:
         "estimate_pos_rmse",
         "adaptive_R_mean",
         "adaptive_R_final",
+        "nis_mean",
+        "nis_max",
+        "yaw_rejections",
     ]
     print(" ".join(f"{header:>18}" for header in headers))
     for row in summaries:
@@ -278,6 +298,9 @@ def print_summary(summaries: list[dict[str, object]]) -> None:
             format_value(row["mean_estimate_position_rmse_m"]),
             format_value(row["mean_adaptive_wheel_yaw_noise_std_rad"]),
             format_value(row["mean_final_wheel_yaw_noise_estimate_std_rad"]),
+            format_value(row["mean_nis"]),
+            format_value(row["max_nis"]),
+            format_value(row["mean_wheel_measurement_rejection_count"]),
         ]
         print(" ".join(f"{value:>18}" for value in values))
 

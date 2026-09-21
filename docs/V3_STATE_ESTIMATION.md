@@ -430,6 +430,86 @@ ros2 launch robotics_sim sim.launch.py \
   estimation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v3_estimation_metrics.csv
 ```
 
+## V4.1 covariance-aware pose EKF
+
+The earlier `fusion_mode:=adaptive` experiment was a two-state heading filter.
+V4.1 adds a separate four-state covariance-aware EKF. Its state is
+
+$$
+\mathbf{x}_{k} = [x_{k},y_{k},\theta_{k},b_{g,k}]^{\mathsf{T}}
+$$
+
+where $b_{g,k}$ is the estimated gyro bias. The prediction uses the wheel
+forward speed and the IMU angular rate. The bias-corrected rate is
+
+$$
+\omega_{k} = \omega_{z,k} - b_{g,k}
+$$
+
+and the pose is propagated with the differential-drive/unicycle model. The
+configured wheel-slip ratio scales the forward distance; it is not inferred by
+the EKF in this first V4 experiment.
+
+The covariance is propagated with the linearized process model:
+
+$$
+P_{k+1}^{-} = F_{k}P_{k}F_{k}^{\mathsf{T}} + Q_{k}
+$$
+
+Here $Q_k$ contains configured gyro-rate noise, wheel-speed noise, and gyro-bias
+random-walk noise. Wheel yaw is used as a scalar measurement:
+
+$$
+\nu_{k} = \mathrm{wrap}(\theta_{k}^{\mathrm{wheel}} - \theta_{k}^{-})
+$$
+
+$$
+S_{k} = P_{\theta\theta,k}^{-} + R_{\mathrm{wheel}}
+$$
+
+$$
+K_{k} = P_{k}^{-}H^{\mathsf{T}}S_{k}^{-1}
+$$
+
+The normalized innovation squared is
+
+$$
+\mathrm{NIS}_{k} = \frac{\nu_{k}^{2}}{S_{k}}
+$$
+
+If NIS exceeds `nis_gate_threshold` (default `9.0`), the wheel-yaw update is
+rejected for that measurement. This is a one-dimensional approximately
+three-sigma gate, not a claim that the full system is statistically calibrated.
+
+The EKF publishes its planar covariance in the standard `Odometry` pose
+covariance field and publishes diagnostics on `/heading_fusion_nis` and
+`/heading_measurement_accepted`. It consumes only `/wheel_odom` and the IMU
+angular velocity. Gazebo `/odom` remains evaluation-only.
+
+The first V4 smoke test keeps navigation on the validated `/odom` topic:
+
+```bash
+ros2 launch robotics_sim sim.launch.py \
+  navigation_pose_topic:=/odom \
+  fusion_mode:=ekf \
+  position_mode:=propagated \
+  wheel_slip_ratio:=0.0 \
+  imu_gyro_bias_rad_s:=0.0 \
+  imu_gyro_noise_std_rad_s:=0.0 \
+  wheel_speed_noise_std_m_s:=0.02 \
+  nis_gate_threshold:=9.0 \
+  planning_radius_m:=0.41 \
+  experiment_timeout_s:=120.0 \
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v4_ekf_smoke_eval.csv \
+  estimation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v4_ekf_smoke_metrics.csv
+```
+
+This run tests estimator consistency without allowing an unvalidated pose to
+control the robot. The next controlled comparisons are zero-slip versus
+`wheel_slip_ratio:=0.10`, followed by seeded gyro bias/noise. Only after those
+diagnostics are understood should `navigation_pose_topic:=/state_estimate` be
+used for closed-loop V4 navigation.
+
 ## Summarising uncertainty experiments
 
 The estimator logger can inject a deterministic gyro bias and reproducible
@@ -451,7 +531,9 @@ The summary reports wheel, raw-gyro, and fused heading RMSE, position RMSE,
 and the percentage change from wheel heading RMSE to fused heading RMSE. A
 positive improvement means that the fused heading RMSE is lower than the
 wheel-odometry heading RMSE; it is not a statistical guarantee from the
-current small number of seeds.
+current small number of seeds. For V4 EKF rows it also preserves the configured
+speed-noise and NIS-gate values and summarizes mean/max NIS and rejected
+wheel-yaw update episodes.
 
 To run a first wheel-slip diagnostic while keeping navigation on the validated
 `/odom` topic:

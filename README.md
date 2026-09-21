@@ -58,6 +58,8 @@ The current implementation includes:
   experiments with configuration values recorded in CSV output;
 - a gated LiDAR-to-static-map localizer with persistent `map → odom` state and
   diagnostic match-status topics;
+- a V4.1 covariance-aware pose EKF with x/y/yaw covariance, NIS gating, and
+  wheel-measurement acceptance diagnostics;
 
 The robot has been tested in simulation from the start position to the goal at
 approximately `(2.0, 0.0)`, with a final position error within the configured
@@ -151,10 +153,11 @@ the physical `/odom` pose was still approximately `0.160 m` from the goal when
 the experiment timeout ended. This is a documented false-goal-completion case,
 not a successful physical navigation result.
 
-The LiDAR localizer remains diagnostic-only. No-slip and denser-scan trials
-produced inconsistent candidate corrections, so the next step is to improve
-the scan observation model and add observability/uncertainty diagnostics before
-using `/localized_estimate` for closed-loop navigation.
+The V4.0 LiDAR localizer remains diagnostic-only. No-slip and denser-scan trials
+produced inconsistent candidate corrections. V4.1 now adds a separate
+covariance-aware pose EKF, but it is also diagnostic-only until its physical
+error, covariance growth, NIS values, and measurement rejection behavior are
+validated under controlled uncertainty.
 
 ## Quick start
 

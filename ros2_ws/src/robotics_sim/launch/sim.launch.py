@@ -99,6 +99,8 @@ def generate_launch_description():
     wheel_noise_adaptation_rate = LaunchConfiguration(
         "wheel_noise_adaptation_rate"
     )
+    wheel_speed_noise_std_m_s = LaunchConfiguration("wheel_speed_noise_std_m_s")
+    nis_gate_threshold = LaunchConfiguration("nis_gate_threshold")
 
     return LaunchDescription(
         [
@@ -306,7 +308,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "fusion_mode",
                 default_value="fixed",
-                description="Heading fusion mode: fixed or adaptive.",
+                description="Fusion mode: fixed, adaptive heading, or full pose EKF.",
             ),
             DeclareLaunchArgument(
                 "gyro_rate_noise_std_rad_s",
@@ -352,6 +354,19 @@ def generate_launch_description():
                 "wheel_noise_adaptation_rate",
                 default_value="0.05",
                 description="Exponential update rate for adaptive wheel-yaw noise.",
+            ),
+            DeclareLaunchArgument(
+                "wheel_speed_noise_std_m_s",
+                default_value="0.02",
+                description="Wheel forward-speed measurement noise standard deviation.",
+            ),
+            DeclareLaunchArgument(
+                "nis_gate_threshold",
+                default_value="9.0",
+                description=(
+                    "One-dimensional NIS threshold for rejecting implausible "
+                    "wheel-yaw EKF updates; zero disables the gate."
+                ),
             ),
             DeclareLaunchArgument(
                 "safety_margin",
@@ -440,6 +455,8 @@ def generate_launch_description():
                     "wheel_yaw_noise_min_std_rad": wheel_yaw_noise_min_std_rad,
                     "wheel_yaw_noise_max_std_rad": wheel_yaw_noise_max_std_rad,
                     "wheel_noise_adaptation_rate": wheel_noise_adaptation_rate,
+                    "wheel_speed_noise_std_m_s": wheel_speed_noise_std_m_s,
+                    "nis_gate_threshold": nis_gate_threshold,
                     "safety_margin": safety_margin,
                     "recovery_timeout_s": recovery_timeout_s,
                     "planning_radius_m": planning_radius_m,

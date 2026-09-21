@@ -14,7 +14,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Float64
+from std_msgs.msg import Bool, Float64
 
 from robotics_nav.estimation_metrics import PoseErrorStats
 
@@ -60,6 +60,8 @@ class EstimationLogger(Node):
         self.declare_parameter("configured_wheel_yaw_noise_min_std_rad", 0.02)
         self.declare_parameter("configured_wheel_yaw_noise_max_std_rad", 0.20)
         self.declare_parameter("configured_wheel_noise_adaptation_rate", 0.05)
+        self.declare_parameter("configured_wheel_speed_noise_std_m_s", 0.02)
+        self.declare_parameter("configured_nis_gate_threshold", 9.0)
         self.declare_parameter(
             "wheel_yaw_noise_estimate_topic", "/wheel_yaw_noise_std_estimate"
         )
@@ -114,6 +116,12 @@ class EstimationLogger(Node):
         self.configured_wheel_noise_rate = float(
             self.get_parameter("configured_wheel_noise_adaptation_rate").value
         )
+        self.configured_wheel_speed_noise = float(
+            self.get_parameter("configured_wheel_speed_noise_std_m_s").value
+        )
+        self.configured_nis_gate = float(
+            self.get_parameter("configured_nis_gate_threshold").value
+        )
         wheel_noise_topic = str(
             self.get_parameter("wheel_yaw_noise_estimate_topic").value
         )
@@ -126,8 +134,15 @@ class EstimationLogger(Node):
         self.latest_bias_estimate: Optional[float] = None
         self.latest_innovation: Optional[float] = None
         self.latest_wheel_yaw_noise: Optional[float] = None
+        self.latest_nis: Optional[float] = None
+        self.latest_measurement_accepted = True
         self.fusion_gain_values: list[float] = []
         self.wheel_yaw_noise_values: list[float] = []
+        self.nis_values: list[float] = []
+        self.measurement_rejection_count = 0
+        self.estimate_covariance_x_values: list[float] = []
+        self.estimate_covariance_y_values: list[float] = []
+        self.estimate_covariance_yaw_values: list[float] = []
         self.last_imu_stamp: Optional[float] = None
         self.imu_received = False
         self.last_truth_stamp: Optional[tuple[int, int]] = None
@@ -180,6 +195,18 @@ class EstimationLogger(Node):
         )
         self.create_subscription(
             Float64,
+            "/heading_fusion_nis",
+            self.nis_callback,
+            10,
+        )
+        self.create_subscription(
+            Bool,
+            "/heading_measurement_accepted",
+            self.measurement_accepted_callback,
+            10,
+        )
+        self.create_subscription(
+            Float64,
             wheel_noise_topic,
             self.wheel_noise_callback,
             10,
@@ -204,6 +231,11 @@ class EstimationLogger(Node):
 
     def estimate_callback(self, message: Odometry) -> None:
         self.latest_estimate = message
+        covariance = message.pose.covariance
+        if len(covariance) >= 36:
+            self.estimate_covariance_x_values.append(float(covariance[0]))
+            self.estimate_covariance_y_values.append(float(covariance[7]))
+            self.estimate_covariance_yaw_values.append(float(covariance[35]))
 
     def imu_callback(self, message: Imu) -> None:
         # Match the estimator's initialization rule: the gyro integration
@@ -238,6 +270,19 @@ class EstimationLogger(Node):
 
     def innovation_callback(self, message: Float64) -> None:
         self.latest_innovation = float(message.data)
+
+    def nis_callback(self, message: Float64) -> None:
+        self.latest_nis = float(message.data)
+        self.nis_values.append(self.latest_nis)
+
+    def measurement_accepted_callback(self, message: Bool) -> None:
+        accepted = bool(message.data)
+        # The estimator republishes the latest gate state at its output rate,
+        # so count the beginning of a rejected episode rather than every
+        # repeated ``False`` message.
+        if not accepted and self.latest_measurement_accepted:
+            self.measurement_rejection_count += 1
+        self.latest_measurement_accepted = accepted
 
     def wheel_noise_callback(self, message: Float64) -> None:
         self.latest_wheel_yaw_noise = float(message.data)
@@ -324,6 +369,8 @@ class EstimationLogger(Node):
             "configured_wheel_yaw_noise_min_std_rad": self.configured_wheel_yaw_noise_min,
             "configured_wheel_yaw_noise_max_std_rad": self.configured_wheel_yaw_noise_max,
             "configured_wheel_noise_adaptation_rate": self.configured_wheel_noise_rate,
+            "configured_wheel_speed_noise_std_m_s": self.configured_wheel_speed_noise,
+            "configured_nis_gate_threshold": self.configured_nis_gate,
             "fusion_gain_samples": len(self.fusion_gain_values),
             "fusion_gain_mean": (
                 sum(self.fusion_gain_values) / len(self.fusion_gain_values)
@@ -338,6 +385,48 @@ class EstimationLogger(Node):
             ),
             "final_bias_estimate_rad_s": self.latest_bias_estimate,
             "final_heading_innovation_rad": self.latest_innovation,
+            "nis_samples": len(self.nis_values),
+            "nis_mean": (
+                sum(self.nis_values) / len(self.nis_values)
+                if self.nis_values
+                else None
+            ),
+            "nis_max": max(self.nis_values) if self.nis_values else None,
+            "wheel_measurement_rejection_count": self.measurement_rejection_count,
+            "estimate_covariance_samples": len(self.estimate_covariance_x_values),
+            "mean_estimate_covariance_x_m2": (
+                sum(self.estimate_covariance_x_values)
+                / len(self.estimate_covariance_x_values)
+                if self.estimate_covariance_x_values
+                else None
+            ),
+            "mean_estimate_covariance_y_m2": (
+                sum(self.estimate_covariance_y_values)
+                / len(self.estimate_covariance_y_values)
+                if self.estimate_covariance_y_values
+                else None
+            ),
+            "mean_estimate_covariance_yaw_rad2": (
+                sum(self.estimate_covariance_yaw_values)
+                / len(self.estimate_covariance_yaw_values)
+                if self.estimate_covariance_yaw_values
+                else None
+            ),
+            "final_estimate_covariance_x_m2": (
+                self.estimate_covariance_x_values[-1]
+                if self.estimate_covariance_x_values
+                else None
+            ),
+            "final_estimate_covariance_y_m2": (
+                self.estimate_covariance_y_values[-1]
+                if self.estimate_covariance_y_values
+                else None
+            ),
+            "final_estimate_covariance_yaw_rad2": (
+                self.estimate_covariance_yaw_values[-1]
+                if self.estimate_covariance_yaw_values
+                else None
+            ),
             "wheel_yaw_noise_estimate_samples": len(self.wheel_yaw_noise_values),
             "wheel_yaw_noise_estimate_mean_std_rad": (
                 sum(self.wheel_yaw_noise_values) / len(self.wheel_yaw_noise_values)

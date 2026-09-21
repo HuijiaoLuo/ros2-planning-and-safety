@@ -16,6 +16,7 @@ from robotics_nav.heading_fusion import (
     blend_angles,
     wrap_angle,
 )
+from robotics_nav.pose_ekf import PoseEKF
 
 
 class HeadingFusionTests(unittest.TestCase):
@@ -165,6 +166,49 @@ class HeadingFusionTests(unittest.TestCase):
 
         self.assertGreaterEqual(fusion.wheel_yaw_noise_std_estimate, 0.03)
         self.assertLessEqual(fusion.wheel_yaw_noise_std_estimate, 0.10)
+
+    def test_pose_ekf_propagates_position_from_wheel_speed(self) -> None:
+        ekf = PoseEKF(
+            gyro_rate_noise_std_rad_s=0.0,
+            wheel_speed_noise_std_m_s=0.0,
+        )
+        ekf.update_wheel(0.0, x=1.0, y=2.0, linear_velocity_x=1.0)
+        ekf.update_gyro(0.0, 0.0)
+        ekf.update_gyro(0.0, 1.0)
+
+        x, y, yaw = ekf.pose
+        self.assertAlmostEqual(x, 2.0, places=6)
+        self.assertAlmostEqual(y, 2.0, places=6)
+        self.assertAlmostEqual(yaw, 0.0, places=6)
+        self.assertEqual(len(ekf.pose_covariance_6x6), 36)
+
+    def test_pose_ekf_wheel_yaw_update_reduces_heading_uncertainty(self) -> None:
+        ekf = PoseEKF(
+            gyro_rate_noise_std_rad_s=0.0,
+            wheel_speed_noise_std_m_s=0.0,
+            wheel_yaw_noise_std_rad=0.05,
+        )
+        ekf.update_wheel(0.0)
+        initial_variance = ekf.covariance[2][2]
+        ekf.update_gyro(0.4, 0.0)
+        ekf.update_gyro(0.4, 1.0)
+        ekf.update_wheel(0.0)
+
+        self.assertTrue(ekf.last_measurement_accepted)
+        self.assertGreater(ekf.last_gain, 0.0)
+        self.assertLess(ekf.covariance[2][2], initial_variance)
+
+    def test_pose_ekf_rejects_large_yaw_innovation_with_nis_gate(self) -> None:
+        ekf = PoseEKF(nis_gate_threshold=9.0)
+        ekf.update_wheel(0.0)
+        ekf.update_gyro(0.0, 0.0)
+        ekf.update_gyro(0.0, 1.0)
+        covariance_before = [row[:] for row in ekf.covariance]
+        ekf.update_wheel(math.pi)
+
+        self.assertFalse(ekf.last_measurement_accepted)
+        self.assertEqual(ekf.last_gain, 0.0)
+        self.assertEqual(ekf.covariance, covariance_before)
 
 
 if __name__ == "__main__":

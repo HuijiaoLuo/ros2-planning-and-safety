@@ -32,6 +32,9 @@ def row(
         "wheel_final_position_error_m": "0.18",
         "estimate_final_position_error_m": "0.18",
         "estimate_final_heading_error_rad": "0.02",
+        "nis_mean": "1.5",
+        "nis_max": "8.0",
+        "wheel_measurement_rejection_count": "2",
     }
 
 
@@ -47,6 +50,11 @@ class EstimationSummaryTests(unittest.TestCase):
         self.assertAlmostEqual(summary["mean_wheel_heading_rmse_rad"], 0.15)
         self.assertAlmostEqual(summary["mean_estimate_heading_rmse_rad"], 0.12)
         self.assertAlmostEqual(summary["heading_rmse_improvement_pct"], 20.0)
+        self.assertAlmostEqual(summary["mean_nis"], 1.5)
+        self.assertAlmostEqual(summary["max_nis"], 8.0)
+        self.assertAlmostEqual(
+            summary["mean_wheel_measurement_rejection_count"], 2.0
+        )
 
     def test_missing_metric_is_reported_as_none(self) -> None:
         current = row(1, 0.10, 0.08)

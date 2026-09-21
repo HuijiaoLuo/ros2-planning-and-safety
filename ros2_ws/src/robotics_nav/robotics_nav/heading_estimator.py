@@ -11,16 +11,19 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Float64
+from std_msgs.msg import Bool, Float64
 
 from robotics_nav.heading_fusion import (
     AdaptiveHeadingFusion,
     DifferentialDrivePoseModel,
     GyroMeasurementModel,
     HeadingFusion,
+    # PoseEKF is kept in its own module because V4 propagates x/y covariance,
+    # while the earlier heading filters only estimate yaw and gyro bias.
     WheelSlipMeasurementModel,
     wrap_angle,
 )
+from robotics_nav.pose_ekf import PoseEKF
 
 
 def yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
@@ -67,9 +70,16 @@ class HeadingEstimator(Node):
         self.declare_parameter("wheel_yaw_noise_min_std_rad", 0.02)
         self.declare_parameter("wheel_yaw_noise_max_std_rad", 0.20)
         self.declare_parameter("wheel_noise_adaptation_rate", 0.05)
+        self.declare_parameter("wheel_speed_noise_std_m_s", 0.02)
+        self.declare_parameter("nis_gate_threshold", 9.0)
         self.declare_parameter("fusion_gain_topic", "/heading_fusion_gain")
         self.declare_parameter("gyro_bias_estimate_topic", "/gyro_bias_estimate")
         self.declare_parameter("heading_innovation_topic", "/heading_fusion_innovation")
+        self.declare_parameter("heading_nis_topic", "/heading_fusion_nis")
+        self.declare_parameter(
+            "heading_measurement_accepted_topic",
+            "/heading_measurement_accepted",
+        )
         self.declare_parameter(
             "wheel_yaw_noise_estimate_topic", "/wheel_yaw_noise_std_estimate"
         )
@@ -113,6 +123,12 @@ class HeadingEstimator(Node):
         wheel_noise_adaptation_rate = float(
             self.get_parameter("wheel_noise_adaptation_rate").value
         )
+        wheel_speed_noise_std = float(
+            self.get_parameter("wheel_speed_noise_std_m_s").value
+        )
+        nis_gate_threshold = float(
+            self.get_parameter("nis_gate_threshold").value
+        )
         publish_rate = float(self.get_parameter("publish_rate_hz").value)
         gyro_bias = float(self.get_parameter("imu_gyro_bias_rad_s").value)
         gyro_noise = float(
@@ -126,9 +142,9 @@ class HeadingEstimator(Node):
         if position_mode not in {"wheel_pose", "propagated"}:
             raise ValueError("position_mode must be 'wheel_pose' or 'propagated'")
 
-        # Both modes consume the same wheel and IMU topics.  The fixed mode is
-        # useful as a transparent baseline; adaptive mode additionally tracks
-        # heading/bias covariance and computes a measurement-dependent gain.
+        # All modes consume the same wheel and IMU topics.  The fixed mode is
+        # the transparent V3 baseline; adaptive mode tracks only heading/bias
+        # covariance; EKF mode propagates the full [x,y,yaw,bias] state.
         if fusion_mode == "adaptive":
             self.fusion = AdaptiveHeadingFusion(
                 gyro_rate_noise_std_rad_s=gyro_rate_noise,
@@ -141,10 +157,21 @@ class HeadingEstimator(Node):
                 wheel_yaw_noise_max_std_rad=wheel_yaw_noise_max_std,
                 wheel_noise_adaptation_rate=wheel_noise_adaptation_rate,
             )
+        elif fusion_mode == "ekf":
+            self.fusion = PoseEKF(
+                gyro_rate_noise_std_rad_s=gyro_rate_noise,
+                wheel_yaw_noise_std_rad=wheel_yaw_noise,
+                gyro_bias_random_walk_std_rad_s2=bias_random_walk,
+                wheel_speed_noise_std_m_s=wheel_speed_noise_std,
+                wheel_slip_ratio=wheel_slip_ratio,
+                initial_heading_variance_rad2=initial_heading_variance,
+                initial_bias_variance_rad2_s2=initial_bias_variance,
+                nis_gate_threshold=nis_gate_threshold,
+            )
         elif fusion_mode == "fixed":
             self.fusion = HeadingFusion(wheel_weight=wheel_weight)
         else:
-            raise ValueError("fusion_mode must be 'fixed' or 'adaptive'")
+            raise ValueError("fusion_mode must be 'fixed', 'adaptive', or 'ekf'")
         self.fusion_mode = fusion_mode
         # These perturbations are injected at the estimator input boundary.  In
         # particular, /odom is never used to create the navigation estimate.
@@ -182,6 +209,16 @@ class HeadingEstimator(Node):
             str(self.get_parameter("wheel_yaw_noise_estimate_topic").value),
             10,
         )
+        self.nis_publisher = self.create_publisher(
+            Float64,
+            str(self.get_parameter("heading_nis_topic").value),
+            10,
+        )
+        self.measurement_accepted_publisher = self.create_publisher(
+            Bool,
+            str(self.get_parameter("heading_measurement_accepted_topic").value),
+            10,
+        )
         self.create_subscription(
             Odometry,
             wheel_topic,
@@ -205,6 +242,8 @@ class HeadingEstimator(Node):
             f"adaptive_wheel_noise={adaptive_wheel_noise}, "
             f"wheel_noise_bounds=({wheel_yaw_noise_min_std:.4f}, "
             f"{wheel_yaw_noise_max_std:.4f}) rad, "
+            f"wheel_speed_noise={wheel_speed_noise_std:.4f} m/s, "
+            f"nis_gate={nis_gate_threshold:.3f}, "
             f"gyro_bias={gyro_bias:.4f} rad/s, "
             f"gyro_noise_std={gyro_noise:.4f} rad/s, seed={gyro_seed}, "
             f"wheel_slip_ratio={wheel_slip_ratio:.3f}."
@@ -238,8 +277,20 @@ class HeadingEstimator(Node):
                 position.y,
                 wheel_yaw,
             )
-        self.latest_fused_yaw = self.fusion.update_wheel(wheel_pose[2])
-        if self.position_mode == "propagated":
+        if self.fusion_mode == "ekf":
+            self.latest_fused_yaw = self.fusion.update_wheel(
+                wheel_pose[2],
+                x=position.x,
+                y=position.y,
+                linear_velocity_x=message.twist.twist.linear.x,
+            )
+        else:
+            self.latest_fused_yaw = self.fusion.update_wheel(wheel_pose[2])
+        if self.fusion_mode == "ekf":
+            # V4 always publishes the EKF state; position_mode remains a
+            # diagnostic parameter for the earlier fixed/adaptive V3 modes.
+            self.latest_wheel_pose = self.fusion.pose
+        elif self.position_mode == "propagated":
             self.latest_wheel_pose = self.position_model.apply(
                 position.x,
                 position.y,
@@ -261,6 +312,8 @@ class HeadingEstimator(Node):
         )
         if fused_yaw is not None:
             self.latest_fused_yaw = fused_yaw
+            if self.fusion_mode == "ekf":
+                self.latest_wheel_pose = self.fusion.pose
 
     def publish_estimate(self) -> None:
         """Publish the current estimated pose and fusion diagnostics."""
@@ -284,7 +337,10 @@ class HeadingEstimator(Node):
             wrap_angle(self.latest_fused_yaw)
         )
         estimate.twist = self.latest_wheel_odom.twist
-        estimate.pose.covariance = self.latest_wheel_odom.pose.covariance
+        if self.fusion_mode == "ekf":
+            estimate.pose.covariance = self.fusion.pose_covariance_6x6
+        else:
+            estimate.pose.covariance = self.latest_wheel_odom.pose.covariance
         estimate.twist.covariance = self.latest_wheel_odom.twist.covariance
         self.publisher.publish(estimate)
         self.gain_publisher.publish(Float64(data=float(self.fusion.last_gain)))
@@ -293,6 +349,16 @@ class HeadingEstimator(Node):
         )
         self.innovation_publisher.publish(
             Float64(data=float(self.fusion.last_innovation))
+        )
+        self.nis_publisher.publish(
+            Float64(data=float(getattr(self.fusion, "last_nis", 0.0)))
+        )
+        self.measurement_accepted_publisher.publish(
+            Bool(
+                data=bool(
+                    getattr(self.fusion, "last_measurement_accepted", True)
+                )
+            )
         )
         wheel_noise_estimate = getattr(
             self.fusion,

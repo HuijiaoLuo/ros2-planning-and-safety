@@ -92,6 +92,8 @@ def generate_launch_description():
     wheel_noise_adaptation_rate = LaunchConfiguration(
         "wheel_noise_adaptation_rate"
     )
+    wheel_speed_noise_std_m_s = LaunchConfiguration("wheel_speed_noise_std_m_s")
+    nis_gate_threshold = LaunchConfiguration("nis_gate_threshold")
 
     return LaunchDescription(
         [
@@ -327,7 +329,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "fusion_mode",
                 default_value="fixed",
-                description="Heading fusion mode: fixed or adaptive.",
+                description="Fusion mode: fixed, adaptive heading, or full pose EKF.",
             ),
             DeclareLaunchArgument(
                 "gyro_rate_noise_std_rad_s",
@@ -377,6 +379,19 @@ def generate_launch_description():
                 default_value="0.05",
                 description="Exponential update rate for adaptive wheel-yaw noise.",
             ),
+            DeclareLaunchArgument(
+                "wheel_speed_noise_std_m_s",
+                default_value="0.02",
+                description="Wheel forward-speed measurement noise standard deviation.",
+            ),
+            DeclareLaunchArgument(
+                "nis_gate_threshold",
+                default_value="9.0",
+                description=(
+                    "One-dimensional NIS threshold for rejecting implausible "
+                    "wheel-yaw EKF updates; zero disables the gate."
+                ),
+            ),
             Node(
                 package="robotics_nav",
                 executable="heading_estimator",
@@ -398,6 +413,8 @@ def generate_launch_description():
                         "wheel_yaw_noise_min_std_rad": wheel_yaw_noise_min_std_rad,
                         "wheel_yaw_noise_max_std_rad": wheel_yaw_noise_max_std_rad,
                         "wheel_noise_adaptation_rate": wheel_noise_adaptation_rate,
+                        "wheel_speed_noise_std_m_s": wheel_speed_noise_std_m_s,
+                        "nis_gate_threshold": nis_gate_threshold,
                         "imu_gyro_bias_rad_s": imu_gyro_bias_rad_s,
                         "imu_gyro_noise_std_rad_s": imu_gyro_noise_std_rad_s,
                         "imu_gyro_noise_seed": imu_gyro_noise_seed,
@@ -433,6 +450,8 @@ def generate_launch_description():
                         "configured_wheel_yaw_noise_min_std_rad": wheel_yaw_noise_min_std_rad,
                         "configured_wheel_yaw_noise_max_std_rad": wheel_yaw_noise_max_std_rad,
                         "configured_wheel_noise_adaptation_rate": wheel_noise_adaptation_rate,
+                        "configured_wheel_speed_noise_std_m_s": wheel_speed_noise_std_m_s,
+                        "configured_nis_gate_threshold": nis_gate_threshold,
                     }
                 ],
             ),
