@@ -23,6 +23,7 @@ def yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
 
 
 def wrap_angle(angle: float) -> float:
+    """Wrap an angle to ``[-pi, pi]`` for the shortest turn direction."""
     return math.atan2(math.sin(angle), math.cos(angle))
 
 
@@ -69,6 +70,12 @@ class WaypointController(Node):
         self.publisher.publish(Twist())
 
     def odom_callback(self, message: Odometry) -> None:
+        """Compute a bounded go-to-goal command from one odometry sample.
+
+        The controller is intentionally simpler than the path follower: it
+        aims directly at one fixed point, rotates in place for large bearing
+        errors, and stops once the configured position tolerance is met.
+        """
         position = message.pose.pose.position
         orientation = message.pose.pose.orientation
         yaw = yaw_from_quaternion(

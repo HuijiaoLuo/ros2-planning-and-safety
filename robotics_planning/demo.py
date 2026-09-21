@@ -24,6 +24,12 @@ S...#.........
 
 
 def main() -> None:
+    """Run all baseline planners on one hand-written obstacle map.
+
+    Keeping the map and endpoints fixed makes the printed path and expansion
+    visualizations a small, reproducible sanity check before larger
+    benchmarks are launched.
+    """
     grid, start, goal = parse_ascii_map(MAP)
     planners = [
         DFSBacktrackingPlanner(),

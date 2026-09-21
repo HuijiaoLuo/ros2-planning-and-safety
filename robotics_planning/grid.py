@@ -50,7 +50,13 @@ class GridMap:
         return float(self.cell_costs.get(cell, 1.0))
 
     def neighbors(self, cell: Cell, diagonal: bool = False) -> tuple[Cell, ...]:
-        """Return free neighboring cells in deterministic order."""
+        """Return free neighboring cells in a deterministic order.
+
+        The planner uses 4-connectivity by default, so every move has the
+        same cardinal-grid geometry and cannot cut diagonally through an
+        obstacle corner. ``diagonal=True`` is available for experiments, but
+        callers then need to choose an appropriate diagonal move cost.
+        """
 
         x, y = cell
         directions = [(1, 0), (0, 1), (-1, 0), (0, -1)]
@@ -63,7 +69,13 @@ class GridMap:
         )
 
     def inflated(self, radius_cells: int) -> "GridMap":
-        """Return a copy with obstacles expanded by a square cell radius."""
+        """Return a copy with obstacles expanded by a square cell radius.
+
+        Inflation is a discrete approximation of configuration-space
+        planning: cells near an obstacle become unavailable to the robot's
+        reference point. The original map remains unchanged so different
+        footprint margins can be compared on identical input data.
+        """
 
         if radius_cells < 0:
             raise ValueError("Inflation radius cannot be negative")
@@ -116,7 +128,12 @@ class GridMap:
 
 
 def parse_ascii_map(lines: str | Iterable[str]) -> tuple[GridMap, Cell, Cell]:
-    """Parse an ASCII map and return ``(grid, start, goal)``."""
+    """Parse an ASCII map and return ``(grid, start, goal)``.
+
+    ``#`` denotes an occupied cell, ``.`` a free cell, ``S`` the unique
+    start, and ``G`` the unique goal. Row order becomes increasing ``y``;
+    this matches :meth:`GridMap.render` and keeps test maps easy to inspect.
+    """
 
     raw_lines = (
         textwrap.dedent(lines).splitlines()

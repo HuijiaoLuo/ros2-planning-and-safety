@@ -10,16 +10,23 @@ from pathlib import Path
 
 
 def read_csv(path: Path) -> list[dict[str, str]]:
+    """Read a trace, plan, or map CSV as dictionaries keyed by column name."""
     with path.open(newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
 
 
 def optional_float(row: dict[str, str], key: str) -> float | None:
+    """Return a nullable numeric field without treating missing data as zero."""
     value = row.get(key, "")
     return None if value in ("", "None", "nan") else float(value)
 
 
 def frame_indices(count: int, maximum: int) -> list[int]:
+    """Choose evenly spaced trace rows while preserving first and last frames.
+
+    Long traces can contain thousands of samples, so the GIF samples the
+    trajectory uniformly instead of writing one image per logger sample.
+    """
     if count <= maximum:
         return list(range(count))
     return [round(index * (count - 1) / (maximum - 1)) for index in range(maximum)]
@@ -147,6 +154,7 @@ def main() -> None:
     indices = frame_indices(len(trace), max(2, args.max_frames))
 
     def update(frame_number: int):
+        """Update the animated trajectory, robot heading, and status text."""
         row = trace[indices[frame_number]]
         current_index = indices[frame_number]
         x = float(row["x_m"])

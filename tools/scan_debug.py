@@ -22,11 +22,13 @@ def sector_minimum(scan: LaserScan, lower: float, upper: float) -> float:
 
 
 def main() -> None:
+    """Read one live scan and print the three sectors used for diagnosis."""
     rclpy.init()
     node = rclpy.create_node("scan_debug")
     received: list[LaserScan] = []
 
     def callback(message: LaserScan) -> None:
+        """Keep the first scan; the diagnostic does not need a stream."""
         received.append(message)
 
     node.create_subscription(

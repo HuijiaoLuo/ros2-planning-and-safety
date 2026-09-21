@@ -42,7 +42,12 @@ def euclidean(a: Cell, b: Cell) -> float:
 def reconstruct_path(
     parent: dict[Cell, Cell], start: Cell, goal: Cell
 ) -> tuple[Cell, ...] | None:
-    """Follow parent pointers from goal back to start, then reverse."""
+    """Follow predecessor links from goal back to start, then reverse.
+
+    Search algorithms store one predecessor per discovered cell rather than
+    copying a full path into every queue entry. Reversing the recovered chain
+    produces the start-to-goal path expected by the benchmark.
+    """
 
     if start == goal:
         return (start,)
@@ -73,6 +78,12 @@ def _result(
     expanded: list[Cell],
     grid: GridMap,
 ) -> SearchResult:
+    """Convert common search bookkeeping into the public result structure.
+
+    The expanded sequence is kept for algorithm comparisons. Path cost is
+    recomputed from the returned path so weighted cell-entry costs are
+    included consistently for every planner.
+    """
     path = reconstruct_path(parent, start, goal)
     if path is None:
         return SearchResult(algorithm, None, tuple(expanded), None)
@@ -84,6 +95,11 @@ class BFSPlanner:
     name = "BFS"
 
     def plan(self, grid: GridMap, start: Cell, goal: Cell) -> SearchResult:
+        """Search in layers using a FIFO queue.
+
+        With unit edge costs, the first visit to the goal has minimum step
+        count. This baseline does not account for weighted cell costs.
+        """
         _validate_endpoints(grid, start, goal)
         frontier = deque([start])
         discovered = {start}
@@ -108,6 +124,11 @@ class DijkstraPlanner:
     name = "Dijkstra"
 
     def plan(self, grid: GridMap, start: Cell, goal: Cell) -> SearchResult:
+        """Expand the currently cheapest known cost-to-reach cell.
+
+        Heap entries can become stale after a shorter route is found. The
+        distance check discards those entries without requiring decrease-key.
+        """
         _validate_endpoints(grid, start, goal)
         counter = 0
         frontier: list[tuple[float, int, Cell]] = [(0.0, counter, start)]
@@ -140,6 +161,11 @@ class GreedyBestFirstPlanner:
         self.heuristic = heuristic
 
     def plan(self, grid: GridMap, start: Cell, goal: Cell) -> SearchResult:
+        """Prioritize cells that appear closest to the goal.
+
+        Greedy search is a speed-oriented comparison, not an optimal planner:
+        it ignores the cost already spent reaching the current cell.
+        """
         _validate_endpoints(grid, start, goal)
         counter = 0
         frontier: list[tuple[float, int, Cell]] = [
@@ -177,6 +203,12 @@ class AStarPlanner:
         self.prefer_goal_on_ties = prefer_goal_on_ties
 
     def plan(self, grid: GridMap, start: Cell, goal: Cell) -> SearchResult:
+        """Minimize ``cost_so_far + heuristic`` with optional tie-breaking.
+
+        The heuristic changes queue order, while ``distances`` controls route
+        replacement. With an admissible heuristic, A* preserves shortest-path
+        cost; the optional goal tie-break only selects among equal priorities.
+        """
         _validate_endpoints(grid, start, goal)
         counter = 0
         start_heuristic = self.heuristic(start, goal)
@@ -226,6 +258,12 @@ class DFSBacktrackingPlanner:
     name = "DFS backtracking"
 
     def plan(self, grid: GridMap, start: Cell, goal: Cell) -> SearchResult:
+        """Explore one branch at a time with an explicit backtracking stack.
+
+        Each stack entry stores the next neighbor index to inspect. This is
+        recursive DFS expressed iteratively, avoiding Python recursion limits
+        in scaling experiments.
+        """
         _validate_endpoints(grid, start, goal)
         visited: set[Cell] = set()
         expanded: list[Cell] = []

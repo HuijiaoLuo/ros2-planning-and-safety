@@ -9,11 +9,13 @@ from pathlib import Path
 
 
 def number(row: dict[str, str], name: str) -> float | None:
+    """Convert one CSV field while treating missing metrics as unavailable."""
     value = row.get(name, "").strip()
     return None if not value or value == "--" else float(value)
 
 
 def matches(row: dict[str, str], **expected: float) -> bool:
+    """Select rows whose configuration matches within CSV float precision."""
     for name, target in expected.items():
         value = number(row, name)
         if value is None or abs(value - target) > 1e-9:
@@ -22,6 +24,7 @@ def matches(row: dict[str, str], **expected: float) -> bool:
 
 
 def read_summary(path: Path) -> list[dict[str, str]]:
+    """Load the already-aggregated robustness table."""
     with path.open(newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
 
@@ -32,6 +35,7 @@ def ordered_points(
     y_field: str,
     **filters: float,
 ) -> tuple[list[float], list[float]]:
+    """Extract and sort one x/y series after applying configuration filters."""
     points = []
     for row in rows:
         if not matches(row, **filters):

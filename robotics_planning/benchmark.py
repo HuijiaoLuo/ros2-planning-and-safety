@@ -33,6 +33,10 @@ def benchmark(
     ``repetitions`` is useful for reducing timer noise on larger maps. The
     reported runtime is the mean over repetitions; the result is from the
     final run.
+
+    Every planner receives the same map and endpoints. This makes
+    ``expanded_nodes`` a comparable measure of search effort, while the
+    returned path and cost describe solution quality.
     """
 
     if repetitions <= 0:
@@ -62,7 +66,11 @@ def benchmark(
 
 
 def format_records(records: Iterable[BenchmarkRecord]) -> str:
-    """Format records as a compact plain-text table."""
+    """Format records as a compact plain-text table.
+
+    Missing paths are shown as ``-`` rather than being converted to zero, so
+    an unreachable case cannot be mistaken for a free or instantaneous one.
+    """
 
     rows = [
         [

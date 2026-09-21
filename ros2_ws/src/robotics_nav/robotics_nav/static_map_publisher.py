@@ -43,6 +43,13 @@ class StaticMapPublisher(Node):
         self.publish_map()
 
     def build_map(self) -> OccupancyGrid:
+        """Build the deterministic map used by the simulation experiments.
+
+        The obstacle coordinates are kept aligned with the Gazebo world, and
+        the boundary cells are occupied so the planner cannot route outside
+        the published map. The message is cached because only its timestamp
+        changes between publications.
+        """
         message = OccupancyGrid()
         message.header.frame_id = self.frame_id
         message.info.resolution = self.resolution
@@ -85,6 +92,7 @@ class StaticMapPublisher(Node):
         y_max: float,
         value: int,
     ) -> None:
+        """Rasterize a world-coordinate rectangle into occupancy cells."""
         for row in range(self.height):
             y = self.origin_y + (row + 0.5) * self.resolution
             for column in range(self.width):

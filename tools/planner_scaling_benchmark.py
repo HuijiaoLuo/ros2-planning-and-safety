@@ -47,6 +47,7 @@ class PlannerSpec:
 
 
 def parse_csv_values(value: str, converter: Callable[[str], object]) -> tuple[object, ...]:
+    """Parse a CLI list such as ``20,50,100`` into typed values."""
     values = tuple(converter(item.strip()) for item in value.split(",") if item.strip())
     if not values:
         raise argparse.ArgumentTypeError("Expected at least one comma-separated value")
@@ -54,6 +55,13 @@ def parse_csv_values(value: str, converter: Callable[[str], object]) -> tuple[ob
 
 
 def make_grid(size: int, density: float, seed: int) -> tuple[GridMap, Cell, Cell]:
+    """Create one reproducible square test case.
+
+    A local ``Random`` instance keeps this case independent from any other
+    random code. Start and goal are reserved as free cells so a failure means
+    the generated obstacles disconnected the route, not that an endpoint was
+    accidentally sampled as occupied.
+    """
     if size <= 1:
         raise ValueError("Grid size must be greater than one")
     if not 0.0 <= density < 1.0:
@@ -72,6 +80,7 @@ def make_grid(size: int, density: float, seed: int) -> tuple[GridMap, Cell, Cell
 
 
 def planner_specs() -> tuple[PlannerSpec, ...]:
+    """Return the planner variants compared by the scaling experiment."""
     return (
         PlannerSpec("DFS backtracking", "none", DFSBacktrackingPlanner),
         PlannerSpec("BFS", "none", BFSPlanner),
@@ -114,6 +123,12 @@ def run_cases(
     base_seed: int,
     repetitions: int,
 ) -> list[dict[str, object]]:
+    """Run every planner on the same generated cases.
+
+    The map is generated once per ``(size, density, seed)`` and then reused
+    for all planner specs. This paired design prevents a planner from looking
+    faster or more successful merely because it received an easier map.
+    """
     if seed_count <= 0:
         raise ValueError("seed_count must be positive")
 
@@ -150,6 +165,7 @@ def run_cases(
 
 
 def write_csv(rows: list[dict[str, object]], output: Path) -> None:
+    """Persist benchmark rows with a stable, analysis-friendly schema."""
     output.parent.mkdir(parents=True, exist_ok=True)
     fields = [
         "grid_size",
@@ -170,6 +186,7 @@ def write_csv(rows: list[dict[str, object]], output: Path) -> None:
 
 
 def print_summary(rows: list[dict[str, object]]) -> None:
+    """Print grouped success, timing, search-effort, and path summaries."""
     groups: dict[tuple[int, float, str], list[dict[str, object]]] = {}
     for row in rows:
         key = (int(row["grid_size"]), float(row["obstacle_density"]), str(row["algorithm"]))

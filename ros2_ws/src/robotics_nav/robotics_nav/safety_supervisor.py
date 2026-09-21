@@ -141,6 +141,13 @@ class SafetySupervisor(Node):
         self.latest_raw_command = message
 
     def scan_callback(self, message: LaserScan) -> None:
+        """Store the latest scan after optional noise injection.
+
+        Arrival time is recorded with a monotonic clock so a synthetic scan
+        delay remains meaningful even when ROS simulation time is disabled or
+        paused. The short deque is enough to expose the oldest sample that
+        satisfies the requested delay.
+        """
         received_at = time.monotonic()
         self.scan_buffer.append((received_at, self.noisy_scan(message)))
 
@@ -245,6 +252,13 @@ class SafetySupervisor(Node):
         return scan.range_max if saw_clear_ray else None
 
     def stop_distance(self, speed: float) -> float:
+        """Compute the forward distance needed to stop safely.
+
+        The envelope combines constant-deceleration braking distance,
+        distance travelled while sensing/processing the command, and a fixed
+        safety margin:
+        ``v^2 / (2 a_max) + v * sensor_latency + safety_margin``.
+        """
         speed = max(0.0, speed)
         braking_distance = speed * speed / (2.0 * self.max_deceleration)
         return braking_distance + speed * self.sensor_latency + self.safety_margin
@@ -276,7 +290,13 @@ class SafetySupervisor(Node):
         return scan.range_max if saw_clear_ray else 0.0
 
     def choose_recovery_turn(self, scan: LaserScan) -> float:
-        """Turn toward the side with more measured clearance."""
+        """Choose one recovery direction using the wider side sector.
+
+        The sign conversion is a model calibration parameter because the
+        LiDAR angle convention and the base angular-command convention need
+        not have the same positive direction. The selected command is latched
+        for the blocked episode by :meth:`publish_safe_command`.
+        """
         left_clearance = self.side_clearance(scan, left=True)
         right_clearance = self.side_clearance(scan, left=False)
         direction = (
@@ -287,6 +307,14 @@ class SafetySupervisor(Node):
         return direction * self.recovery_turn_speed
 
     def publish_safe_command(self) -> None:
+        """Publish either the raw command or a fail-safe override.
+
+        The decision order is deliberately conservative: no scan, no pose, or
+        excessive tilt all produce zero velocity. Otherwise the raw forward
+        speed is compared with the stopping envelope and minimum clearance.
+        When blocked, the supervisor owns the command, turns toward the
+        clearer side, and eventually holds zero if recovery times out.
+        """
         if self.latest_raw_command is None:
             return
 

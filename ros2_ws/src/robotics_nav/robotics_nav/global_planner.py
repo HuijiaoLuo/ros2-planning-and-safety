@@ -83,6 +83,14 @@ class GlobalPlanner(Node):
         self.try_plan()
 
     def try_plan(self) -> None:
+        """Replan when both map and pose are available and the start moved.
+
+        The planner works in map-grid coordinates, while odometry arrives in
+        world coordinates. An empty path is published for invalid or
+        unreachable endpoints so downstream nodes do not keep following a
+        stale route. The signature check avoids republishing identical plans
+        on every odometry callback.
+        """
         if self.latest_map is None or self.latest_odom is None:
             return
 
@@ -118,6 +126,13 @@ class GlobalPlanner(Node):
         x: float,
         y: float,
     ) -> Optional[Cell]:
+        """Convert a world position into the containing occupancy-grid cell.
+
+        The small ``stable_floor`` tolerance compensates for the float32
+        resolution stored in ``OccupancyGrid``. Without it, an exact world
+        boundary such as ``x=2.0`` can arrive as ``0.100000001`` and be
+        assigned to the previous cell.
+        """
         if grid.info.resolution <= 0.0:
             return None
         # OccupancyGrid stores resolution as float32. For example, 0.1 may
@@ -145,6 +160,13 @@ class GlobalPlanner(Node):
         return value < 0 or value >= self.occupied_threshold
 
     def inflate_obstacles(self, grid: OccupancyGrid) -> set[Cell]:
+        """Expand occupied cells by the configured robot-radius footprint.
+
+        A* plans the robot reference point, not its full body. Marking every
+        cell within ``ceil(radius / resolution)`` of an occupied cell turns
+        the body-clearance requirement into a point-planning problem and
+        deliberately errs on the conservative side at grid boundaries.
+        """
         radius_cells = math.ceil(self.robot_radius_m / grid.info.resolution)
         occupied: set[Cell] = set()
 
@@ -170,6 +192,13 @@ class GlobalPlanner(Node):
         start: Cell,
         goal: Cell,
     ) -> Optional[tuple[Cell, ...]]:
+        """Run unit-cost 4-connected A* on the inflated occupancy grid.
+
+        Manhattan distance is admissible for this motion model. ``cost_so_far``
+        prevents a later, longer route from replacing a shorter one, while
+        ``parent`` stores only the information needed to reconstruct the final
+        cell sequence.
+        """
         if start in occupied or goal in occupied:
             return None
 
@@ -206,6 +235,7 @@ class GlobalPlanner(Node):
         occupied: set[Cell],
         cell: Cell,
     ) -> tuple[Cell, ...]:
+        """Return in-bounds, non-inflated cardinal neighbors."""
         column, row = cell
         candidates = (
             (column + 1, row),
@@ -229,6 +259,7 @@ class GlobalPlanner(Node):
         start: Cell,
         goal: Cell,
     ) -> tuple[Cell, ...]:
+        """Follow A* predecessor links from goal back to start."""
         reverse_path = [goal]
         current = goal
         while current != start:
@@ -243,6 +274,12 @@ class GlobalPlanner(Node):
         cells: tuple[Cell, ...],
         exact_goal: Optional[tuple[float, float]] = None,
     ) -> None:
+        """Convert grid-cell centers into a ROS ``nav_msgs/Path`` message.
+
+        The final pose may use the exact requested goal rather than the center
+        of its containing cell; this reduces visible endpoint error without
+        changing which cells A* considered safe.
+        """
         message = Path()
         message.header.stamp = self.get_clock().now().to_msg()
         message.header.frame_id = grid.header.frame_id or "odom"

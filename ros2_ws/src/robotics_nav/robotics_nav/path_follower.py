@@ -142,6 +142,12 @@ class PathFollower(Node):
         self.publisher.publish(Twist())
 
     def select_target(self, _x: float, _y: float) -> Optional[tuple[float, float]]:
+        """Select the first ordered waypoint at the configured lookahead.
+
+        Distance is accumulated along the path prefix rather than measured to
+        the globally nearest waypoint. That preserves the planner's detour
+        around obstacles and avoids jumping across a U-shaped route.
+        """
         if self.latest_path is None or not self.latest_path.poses:
             return None
 
@@ -165,6 +171,14 @@ class PathFollower(Node):
         return points[-1]
 
     def control_loop(self) -> None:
+        """Turn the current path target into a bounded unicycle command.
+
+        The controller first handles missing inputs and the endpoint stop
+        condition. Away from the goal it points toward a lookahead waypoint;
+        near the goal it tracks the exact endpoint. Linear speed is reduced
+        as heading error grows, and large errors force an in-place rotation so
+        the robot does not cut across inflated grid corners.
+        """
         if self.latest_path is None:
             self.report_state("Waiting for /plan.")
             self.publish_stop()
