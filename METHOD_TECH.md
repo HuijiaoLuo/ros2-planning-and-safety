@@ -172,29 +172,16 @@ orientation from becoming a hidden ground-truth input.
 The gyro heading is integrated as:
 
 $$
-\theta^{\mathrm{imu}}_{k+1}
-=
-\mathrm{wrap}\left(
-\theta^{\mathrm{imu}}_k + \omega_{z,k}\Delta t
-\right)
+\theta^{\mathrm{imu}}_{k+1} = \mathrm{wrap}\left(\theta^{\mathrm{imu}}_{k} + \omega_{z,k}\Delta t\right)
 $$
 
 The current fused state is then slowly corrected toward wheel-odometry yaw:
 
 $$
-\theta^{\mathrm{fused}}_k
-=
-\mathrm{wrap}\left(
-\theta^{\mathrm{fused}}_k
-+
-\lambda\,\mathrm{wrap}\left(
-\theta^{\mathrm{wheel}}_k-
-\theta^{\mathrm{fused}}_k
-\right)
-\right)
+\theta^{\mathrm{fused}}_k = \mathrm{wrap}\left(\theta^{\mathrm{fused}}_k + \lambda\,\mathrm{wrap}\left(\theta^{\mathrm{wheel}}_k - \theta^{\mathrm{fused}}_k\right)\right)
 $$
 
-The default `\lambda=0.02` is a transparent tuning parameter. It gives the
+The default $\lambda = 0.02$ is a transparent tuning parameter. It gives the
 gyro short-term responsiveness while allowing wheel yaw to limit long-term
 drift; it is not a covariance-derived EKF gain. The first estimator publishes
 wheel-odometry `x` and `y` together with the fused heading on `/state_estimate`.
@@ -206,17 +193,20 @@ ros2 launch robotics_sim sim.launch.py \
   navigation_pose_topic:=/odom
 ```
 
-The explicit V3 experiment switches the planner, follower, and safety layer:
+The validated V3 diagnostic keeps navigation on `/odom` while the estimator
+runs in parallel:
 
 ```bash
 ros2 launch robotics_sim sim.launch.py \
-  navigation_pose_topic:=/state_estimate \
+  navigation_pose_topic:=/odom \
   experiment_timeout_s:=120.0 \
-  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v3_heading_fusion.csv
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v3_heading_diagnostic.csv
 ```
 
-This first milestone is intentionally not an EKF. Bias, white noise, wheel
-slip, covariance handling, and RMSE reporting are the next controlled steps.
+Switching navigation to `/state_estimate` remains an exploratory experiment,
+not a validated full-pose navigation mode. This first milestone is
+intentionally not an EKF. Bias, white noise, wheel slip, covariance handling,
+and RMSE reporting are the next controlled steps.
 
 ## 5. Waypoint controller
 

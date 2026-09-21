@@ -31,29 +31,16 @@ orientation cannot silently become a controller measurement.
 For an IMU sample at time step `k`:
 
 $$
-\theta^{\mathrm{imu}}_{k+1}
-=
-\mathrm{wrap}\left(
-\theta^{\mathrm{imu}}_k + \omega_{z,k}\Delta t
-\right)
+\theta^{\mathrm{imu}}_{k+1} = \mathrm{wrap}\left(\theta^{\mathrm{imu}}_{k} + \omega_{z,k}\Delta t\right)
 $$
 
 The wheel-odometry yaw is used as a slow correction:
 
 $$
-\theta^{\mathrm{fused}}_k
-=
-\mathrm{wrap}\left(
-\theta^{\mathrm{imu}}_k
-+
-\lambda\,\mathrm{wrap}\left(
-\theta^{\mathrm{wheel}}_k-
-\theta^{\mathrm{imu}}_k
-\right)
-\right)
+\theta^{\mathrm{fused}}_k = \mathrm{wrap}\left(\theta^{\mathrm{fused}}_k + \lambda\,\mathrm{wrap}\left(\theta^{\mathrm{wheel}}_k - \theta^{\mathrm{fused}}_k\right)\right)
 $$
 
-The default `lambda=0.02` gives the gyro the short-term role and wheel yaw a
+The default $\lambda = 0.02$ gives the gyro the short-term role and wheel yaw a
 small drift-correction role. The value is a first experimental parameter, not
 a statistical covariance estimate.
 
@@ -66,24 +53,25 @@ ros2 launch robotics_sim sim.launch.py \
   navigation_pose_topic:=/odom
 ```
 
-To let navigation consume the estimator output instead:
+The validated V3 diagnostic keeps navigation on `/odom` while the estimator
+runs in parallel:
 
 ```bash
 ros2 launch robotics_sim sim.launch.py \
-  navigation_pose_topic:=/state_estimate \
+  navigation_pose_topic:=/odom \
   planning_radius_m:=0.41 \
   experiment_timeout_s:=120.0 \
-  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v3_heading_fusion.csv
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v3_heading_diagnostic.csv
 ```
 
-The `0.41 m` radius is intentional for the first V3 run: it is the smallest
+Switching navigation to `/state_estimate` remains exploratory because the
+current estimator does not yet provide validated `x/y` localization. The
+`0.41 m` radius is useful for that later experiment because it is the smallest
 radius that achieved consistent success in the tested V2 uncertainty cases.
-Using the tighter `0.35 m` radius at this point would mix localization error
-with the already observed planning/safety boundary behavior.
 
 `evaluation_logger` continues to use `/odom` as evaluation-only ground truth.
 The first validation should compare `/odom`, `/wheel_odom`, and
-`/state_estimate` while checking that the controller topic is `/state_estimate`.
+`/state_estimate` while checking that the controller remains on `/odom`.
 
 ## Next experiments
 
