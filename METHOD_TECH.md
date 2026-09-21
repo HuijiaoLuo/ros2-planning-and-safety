@@ -812,18 +812,27 @@ success rate remains unchanged.
 
 ### Noise-induced planning boundary
 
-To locate the feasibility boundary, the same `0.03 m` noise case was tested
-with a smaller planning radius:
+To locate the feasibility boundary, three seeds were tested at both
+`planning_radius_m=0.40 m` and `0.41 m` with `scan_noise_std_m=0.03 m`:
 
-| Noise standard deviation | Planning radius | `success` | `travelled_distance_m` | `minimum_clearance_m` | `safety_override_ratio` | `collision` |
-| ---: | ---: | :---: | ---: | ---: | ---: | :---: |
-| 0.03 m | 0.40 m | no | 0.373 | 0.551 | 0.722 | false |
-| 0.03 m | 0.41 m | yes | 3.983 | 0.632 | 0.000 | false |
+| Noise standard deviation | Planning radius | Success rate | Mean time-to-goal (successful runs) | Mean minimum clearance | Mean safety override ratio | Collision count |
+| ---: | ---: | :---: | ---: | ---: | ---: | ---: |
+| 0.03 m | 0.40 m | 1/3 | 462.93 s | 0.525 m | 0.683 | 0/3 |
+| 0.03 m | 0.41 m | 3/3 | 71.00 s | 0.632 m | 0.000 | 0/3 |
 
-The `0.40 m` case remained collision-free but spent most of the run in
-safety recovery and did not reach the goal. Together with the three successful
-`0.41 m` seeds, this identifies `0.41 m` as the smallest tested feasible
+The `0.40 m` configuration is therefore not strictly impossible, but it is
+stochastic and operationally poor. Its one successful seed took `462.93 s`,
+triggered 89 safety overrides, and reached a measured minimum clearance of
+`0.485 m`; the other two seeds did not reach the goal. By contrast, all three
+`0.41 m` seeds succeeded in approximately 71 s without sustained safety
+intervention. We therefore use `0.41 m` as the smallest tested *robust*
 planning radius for this map and noise level.
+
+At the higher noise level `scan_noise_std_m=0.05 m`, the `0.40 m` radius
+failed for all three seeds (`0/3`). The mean safety override ratio was `0.764`
+and the mean measured minimum clearance was `0.573 m`; all runs remained
+collision-free. This reinforces the distinction between a marginal boundary
+configuration and a robust operating configuration.
 
 An interaction test combined `scan_delay_s=0.30 s` with
 `scan_noise_std_m=0.05 m`, using `planning_radius_m=0.41 m` and seed `1`:
