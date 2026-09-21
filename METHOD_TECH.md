@@ -359,7 +359,8 @@ $$
 J(x,y,\theta) = \frac{1}{N}\sum_{i=1}^{N} e_i(x,y,\theta) + \lambda((x-\hat{x}_{\mathrm{odom}})^2 + (y-\hat{y}_{\mathrm{odom}})^2)
 $$
 
-The corrected position is the nearby candidate with the smallest score $J$.
+The corrected position $(\hat{x}_{k},\hat{y}_{k})$ is the nearby candidate with
+the smallest score $J$.
 The heading search is local and bounded; it is not a global orientation solve.
 The node is therefore a transparent local scan matcher, not a complete SLAM
 or covariance-aware localization system.
