@@ -36,7 +36,7 @@ For an IMU sample at time step $k$:
 
 $$
 \theta^{\mathrm{imu}}_{k+1}
-=\operatorname{wrap}\left(
+=\mathrm{wrap}\left(
 \theta^{\mathrm{imu}}_{k}+\omega_{z,k}\Delta t_k
 \right).
 $$
@@ -45,9 +45,9 @@ The fixed fusion mode applies a small correction toward wheel yaw:
 
 $$
 \theta^{\mathrm{fused}}_{k}
-=\operatorname{wrap}\left(
+=\mathrm{wrap}\left(
 \theta^{\mathrm{fused}}_{k-1}
-+\lambda\operatorname{wrap}\left(
++\lambda\mathrm{wrap}\left(
 \theta^{\mathrm{wheel}}_{k}-\theta^{\mathrm{fused}}_{k-1}
 \right)
 \right).
@@ -91,7 +91,7 @@ $$
 
 $$
 R_{\mathrm{wheel},k}
-=\operatorname{clip}\left(
+=\mathrm{clip}\left(
 \widehat{S}_{k}-P_k^-,R_{\min},R_{\max}
 \right),
 $$
@@ -99,7 +99,7 @@ $$
 where
 
 $$
-\nu_k=\operatorname{wrap}\left(
+\nu_k=\mathrm{wrap}\left(
 \theta_k^{\mathrm{wheel}}-\theta_k^-
 \right).
 $$
@@ -135,9 +135,9 @@ where $s$ is `wheel_slip_ratio`. The midpoint heading is
 
 $$
 \theta_{\mathrm{mid},k}
-=\operatorname{wrap}\left(
+=\mathrm{wrap}\left(
 \hat{\theta}_{k-1}
-+\frac{1}{2}\operatorname{wrap}\left(
++\frac{1}{2}\mathrm{wrap}\left(
 \hat{\theta}_{k}-\hat{\theta}_{k-1}
 \right)
 \right).
