@@ -411,6 +411,11 @@ def main(args=None) -> None:
         # down.
         if rclpy.ok():
             raise
+    except Exception:
+        # Coordinated evaluation shutdown can interrupt a publish or DDS wait
+        # while the context is already invalid. Preserve genuine live errors.
+        if rclpy.ok():
+            raise
     finally:
         if rclpy.ok():
             node.publish_stop()

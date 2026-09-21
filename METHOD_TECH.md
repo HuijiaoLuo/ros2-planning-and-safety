@@ -656,6 +656,23 @@ velocity and reports a recovery-timeout error. This is a fail-safe experiment
 termination condition for infeasible planner/safety combinations; it is not a
 replacement for replanning.
 
+For repeatable batch experiments, `experiment_timeout_s` provides a separate
+total-run limit in the evaluation logger. A positive value causes the logger
+to finish the run and shut down the ROS graph after that many seconds from the
+first odometry sample; `0.0` disables the limit. The CSV records both
+`configured_experiment_timeout_s` and `termination_reason`, whose values can
+include `goal_reached`, `experiment_timeout`, or `manual_interrupt`. This
+distinguishes a genuine navigation failure from an intentionally bounded
+experiment.
+
+Example:
+
+```bash
+ros2 launch robotics_sim sim.launch.py \
+  experiment_timeout_s:=120.0 \
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/timeout_case.csv
+```
+
 ### Representative planner/safety alignment experiment
 
 The following runs use the same world, start pose, goal, and controller. Only
@@ -675,6 +692,7 @@ The result columns are defined as follows:
 | `minimum_clearance_m` | Smallest valid LiDAR return in the forward sector during the run. |
 | `safety_override_ratio` | Safety-override time divided by motion time. |
 | `collision` | Contact-sensor result reported by the evaluation logger. |
+| `termination_reason` | Why the evaluation logger stopped the run. |
 
 The comparison results are:
 
@@ -835,15 +853,20 @@ collision-free. This reinforces the distinction between a marginal boundary
 configuration and a robust operating configuration.
 
 An interaction test combined `scan_delay_s=0.30 s` with
-`scan_noise_std_m=0.05 m`, using `planning_radius_m=0.41 m` and seed `1`:
+`scan_noise_std_m=0.05 m`, using `planning_radius_m=0.41 m` and three seeds:
 
-| Scan delay | Noise standard deviation | `success` | `time_to_goal_s` | `minimum_clearance_m` | `safety_override_time_s` | `safety_override_ratio` | `collision` |
-| ---: | ---: | :---: | ---: | ---: | ---: | ---: | :---: |
-| 0.30 s | 0.05 m | yes | 69.15 | 0.632 | 0.250 | 0.0036 | false |
+| Seed | `success` | `termination_reason` | `time_to_goal_s` | `minimum_clearance_m` | `safety_override_time_s` | `safety_override_ratio` | `collision` |
+| ---: | :---: | :--- | ---: | ---: | ---: | ---: | :---: |
+| 1 | yes | goal reached | 69.15 | 0.632 | 0.250 | 0.0036 | false |
+| 2 | yes | goal reached | 69.06 | 0.627 | 0.800 | 0.0116 | false |
+| 3 | yes | goal reached | 69.93 | 0.633 | 0.499 | 0.0072 | false |
+| Mean | 3/3 | -- | 69.38 | 0.631 | 0.516 | 0.0075 | 0/3 |
 
-The combined uncertainty still produced a successful collision-free run, but
-it triggered a short safety intervention. More seeds would be needed before
-making a statistical claim about the interaction effect.
+The combined uncertainty therefore produced successful, collision-free
+navigation for all three seeds. The safety layer intervened briefly in each
+run, but the mean override ratio remained below one percent. This is a
+repeatability result for the tested configuration, not a general statistical
+guarantee for arbitrary maps or uncertainty levels.
 
 ### Robustness summary tool
 

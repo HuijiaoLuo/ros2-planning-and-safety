@@ -23,6 +23,7 @@ def generate_launch_description():
     safety_margin = LaunchConfiguration("safety_margin")
     recovery_timeout_s = LaunchConfiguration("recovery_timeout_s")
     planning_radius_m = LaunchConfiguration("planning_radius_m")
+    experiment_timeout_s = LaunchConfiguration("experiment_timeout_s")
     scan_delay_s = LaunchConfiguration("scan_delay_s")
     scan_noise_std_m = LaunchConfiguration("scan_noise_std_m")
     scan_noise_seed = LaunchConfiguration("scan_noise_seed")
@@ -94,6 +95,11 @@ def generate_launch_description():
                 default_value="0.35",
                 description="Obstacle-inflation radius used by the global planner.",
             ),
+            DeclareLaunchArgument(
+                "experiment_timeout_s",
+                default_value="0.0",
+                description="Optional total evaluation timeout; zero disables it.",
+            ),
             ExecuteProcess(
                 cmd=["gz", "sim", "-r", world_path],
                 output="screen",
@@ -127,6 +133,7 @@ def generate_launch_description():
                     "safety_margin": safety_margin,
                     "recovery_timeout_s": recovery_timeout_s,
                     "planning_radius_m": planning_radius_m,
+                    "experiment_timeout_s": experiment_timeout_s,
                 }.items(),
             ),
         ]

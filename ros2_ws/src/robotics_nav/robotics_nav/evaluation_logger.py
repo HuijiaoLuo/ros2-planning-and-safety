@@ -51,6 +51,7 @@ class EvaluationLogger(Node):
         self.declare_parameter("scan_noise_seed", 0)
         self.declare_parameter("safety_margin", 0.15)
         self.declare_parameter("planning_radius_m", 0.35)
+        self.declare_parameter("experiment_timeout_s", 0.0)
 
         self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
         self.front_angle = math.radians(
@@ -83,6 +84,9 @@ class EvaluationLogger(Node):
         self.configured_planning_radius = float(
             self.get_parameter("planning_radius_m").value
         )
+        self.configured_experiment_timeout = float(
+            self.get_parameter("experiment_timeout_s").value
+        )
         safety_override_topic = str(
             self.get_parameter("safety_override_topic").value
         )
@@ -108,6 +112,7 @@ class EvaluationLogger(Node):
         self.last_sample_time: Optional[float] = None
         self.started_at: Optional[float] = None
         self.goal_reached_at: Optional[float] = None
+        self.termination_reason: Optional[str] = None
 
         self.travelled_distance = 0.0
         self.motion_time = 0.0
@@ -157,6 +162,25 @@ class EvaluationLogger(Node):
             10,
         )
         self.timer = self.create_timer(1.0 / sample_rate, self.sample)
+        self.timeout_timer = self.create_timer(0.1, self.check_experiment_timeout)
+
+    def finish_run(self, reason: str) -> None:
+        if self.termination_reason is not None:
+            return
+        self.termination_reason = reason
+        self.get_logger().info(f"Finishing evaluation: {reason}.")
+        if rclpy.ok():
+            rclpy.shutdown()
+
+    def check_experiment_timeout(self) -> None:
+        if (
+            self.configured_experiment_timeout <= 0.0
+            or self.started_at is None
+            or self.termination_reason is not None
+        ):
+            return
+        if time.monotonic() - self.started_at >= self.configured_experiment_timeout:
+            self.finish_run("experiment_timeout")
 
     def odom_callback(self, message: Odometry) -> None:
         self.latest_odom = message
@@ -321,6 +345,9 @@ class EvaluationLogger(Node):
         self.last_sample_time = now
         self.sample_count += 1
 
+        if self.goal_reached_at is not None and self.termination_reason is None:
+            self.finish_run("goal_reached")
+
     def result(self) -> dict[str, object]:
         now = time.monotonic()
         final_error: Optional[float] = None
@@ -377,6 +404,8 @@ class EvaluationLogger(Node):
             "configured_scan_noise_seed": self.configured_scan_noise_seed,
             "configured_safety_margin_m": self.configured_safety_margin,
             "configured_planning_radius_m": self.configured_planning_radius,
+            "configured_experiment_timeout_s": self.configured_experiment_timeout,
+            "termination_reason": self.termination_reason or "manual_interrupt",
             "minimum_clearance_m": (
                 None
                 if math.isinf(self.minimum_clearance)
@@ -485,7 +514,14 @@ def main(args=None) -> None:
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        if node.termination_reason is None:
+            node.termination_reason = "manual_interrupt"
+    except Exception:
+        # rclpy raises ExternalShutdownException when another node requests a
+        # coordinated shutdown. Re-raise genuine live-node failures, but let
+        # the logger still write its final metrics during normal shutdown.
+        if rclpy.ok():
+            raise
     finally:
         node.report()
         node.destroy_node()

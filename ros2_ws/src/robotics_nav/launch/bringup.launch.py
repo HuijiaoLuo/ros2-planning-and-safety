@@ -1,5 +1,7 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration
 
@@ -14,6 +16,7 @@ def generate_launch_description():
     safety_margin = LaunchConfiguration("safety_margin")
     recovery_timeout_s = LaunchConfiguration("recovery_timeout_s")
     planning_radius_m = LaunchConfiguration("planning_radius_m")
+    experiment_timeout_s = LaunchConfiguration("experiment_timeout_s")
     scan_delay_s = LaunchConfiguration("scan_delay_s")
     scan_noise_std_m = LaunchConfiguration("scan_noise_std_m")
     scan_noise_seed = LaunchConfiguration("scan_noise_seed")
@@ -85,6 +88,11 @@ def generate_launch_description():
                 default_value="0.35",
                 description="Obstacle-inflation radius used by the global planner.",
             ),
+            DeclareLaunchArgument(
+                "experiment_timeout_s",
+                default_value="0.0",
+                description="Optional total evaluation timeout; zero disables it.",
+            ),
             Node(
                 package="robotics_nav",
                 executable="path_follower",
@@ -147,7 +155,7 @@ def generate_launch_description():
                     }
                 ],
             ),
-            Node(
+            evaluation_node := Node(
                 package="robotics_nav",
                 executable="evaluation_logger",
                 name="evaluation_logger",
@@ -169,8 +177,19 @@ def generate_launch_description():
                         "scan_noise_seed": scan_noise_seed,
                         "safety_margin": safety_margin,
                         "planning_radius_m": planning_radius_m,
+                        "experiment_timeout_s": experiment_timeout_s,
                     }
                 ],
+            ),
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=evaluation_node,
+                    on_exit=[
+                        EmitEvent(
+                            event=Shutdown(reason="evaluation logger exited")
+                        )
+                    ],
+                )
             ),
         ]
     )
