@@ -233,11 +233,7 @@ not a validated full-pose navigation mode. The adaptive heading mode keeps the
 state
 
 $$
-\mathbf{x}_k =
-\begin{bmatrix}
-\theta_k \\
-b_{g,k}
-\end{bmatrix}
+\mathbf{x}_k=(\theta_k,\,b_{g,k})^{\mathsf T}
 $$
 
 The correction is represented as a persistent planar transform

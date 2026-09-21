@@ -10,18 +10,27 @@ validated under controlled uncertainty.
 The filter state is
 
 $$
-\mathbf{x}_k=
-\begin{bmatrix}
-x_k\\y_k\\\theta_k\\b_{g,k}
-\end{bmatrix},
+\mathbf{x}_k=(x_k,\,y_k,\,\theta_k,\,b_{g,k})^{\mathsf T}.
 $$
 
 where $b_{g,k}$ is the estimated gyro bias. The IMU supplies angular rate and
 wheel odometry supplies body-forward speed. The bias-corrected rate is
 
+Here $b_{g,k}$ is not a value directly measured by the IMU. It is an internal
+EKF state representing the gyro's slowly varying zero-rate offset: if the robot
+were perfectly still, the real angular velocity would be zero, but the gyro
+could still report a small non-zero value. The filter estimates this offset in
+rad/s and subtracts it from the raw angular-rate measurement.
+
 $$
 \omega_k=\omega_{z,k}-b_{g,k}.
 $$
+
+Here $\omega_{z,k}$ is the raw IMU measurement of rotation about the vertical
+axis at sample $k$, $b_{g,k}$ is the current estimated false rotation rate,
+and $\omega_k$ is the angular rate used by the motion model. This equation
+uses the current EKF estimate of the bias rather than subtracting a manually
+chosen constant.
 
 The symbols have the following physical meanings:
 
@@ -47,6 +56,12 @@ $$
 \Delta s_k=(1-s)v_{x,k}\Delta t_k.
 $$
 
+Here $v_{x,k}$ is the forward speed reported by wheel odometry, $\Delta t_k$
+is the time elapsed since the previous IMU sample, and $s$ is a dimensionless
+fractional loss. For example, $s=0.10$ means that the estimator models only
+90% of the measured forward travel. In this experiment $s$ is configured; the
+EKF does not estimate it.
+
 The filter uses the midpoint of consecutive headings:
 
 $$
@@ -56,6 +71,10 @@ $$
 +\frac{1}{2}\mathrm{wrap}(\theta_k-\theta_{k-1})
 \right).
 $$
+
+The midpoint heading is used because the robot can rotate while it translates
+during one sample interval. It approximates the direction of travel during
+that interval instead of using only the heading at its beginning or end.
 
 The unicycle prediction is therefore
 
@@ -71,6 +90,10 @@ $$
 \theta_k^-=\mathrm{wrap}(\theta_{k-1}+\omega_k\Delta t_k).
 $$
 
+The superscript $-$ means “predicted before the new wheel-yaw measurement is
+used”. Thus $x_k^-$, $y_k^-$, and $\theta_k^-$ are the pose obtained by
+integrating the motion model; they are not a second sensor reading.
+
 The covariance is propagated with the linearized model:
 
 $$
@@ -80,6 +103,12 @@ $$
 $Q_k$ contains configured gyro-rate noise, wheel-speed noise, and gyro-bias
 random-walk noise. The slip ratio is configured in this first experiment; it
 is not estimated as an additional state.
+
+The EKF therefore maintains both a state vector and a confidence description.
+The state says where the robot is estimated to be. The covariance $P$ says how
+uncertain that estimate is and which errors are correlated. Its diagonal terms
+have units $\mathrm{m}^2$, $\mathrm{m}^2$, $\mathrm{rad}^2$, and
+$(\mathrm{rad/s})^2$ for position, position, heading, and gyro bias.
 
 ## How the EKF is calculated
 
@@ -110,17 +139,15 @@ $$
 the predicted pose is
 
 $$
-\begin{bmatrix}
-x_k^-\\
-y_k^-\\
-\theta_k^-
-\end{bmatrix}
-=
-\begin{bmatrix}
-x_{k-1}+\Delta s_k\cos(\theta_{\mathrm{mid},k})\\
-y_{k-1}+\Delta s_k\sin(\theta_{\mathrm{mid},k})\\
-\mathrm{wrap}(\theta_{k-1}+\omega_k\Delta t_k)
-\end{bmatrix}.
+x_k^-=x_{k-1}+\Delta s_k\cos(\theta_{\mathrm{mid},k}),
+$$
+
+$$
+y_k^-=y_{k-1}+\Delta s_k\sin(\theta_{\mathrm{mid},k}),
+$$
+
+$$
+\theta_k^-=\mathrm{wrap}(\theta_{k-1}+\omega_k\Delta t_k).
 $$
 
 The superscript $-$ means “before using the new wheel-yaw measurement”.
@@ -131,16 +158,27 @@ The covariance $P$ describes uncertainty in $x$, $y$, yaw, and gyro bias. The
 EKF linearizes the motion model around the current estimate. In this
 implementation the state-transition Jacobian is approximately
 
+The non-zero entries used by the implementation are
+
 $$
-F_k=\begin{bmatrix}
-1 & 0 & -\Delta s_k\sin(\theta_{\mathrm{mid},k}) &
--\frac{1}{2}\Delta s_k\Delta t_k\sin(\theta_{\mathrm{mid},k})\\
-0 & 1 & \Delta s_k\cos(\theta_{\mathrm{mid},k}) &
--\frac{1}{2}\Delta s_k\Delta t_k\cos(\theta_{\mathrm{mid},k})\\
-0 & 0 & 1 & -\Delta t_k\\
-0 & 0 & 0 & 1
-\end{bmatrix}.
+F_{11}=1,\quad F_{22}=1,\quad F_{33}=1,\quad F_{44}=1,
 $$
+
+$$
+F_{13}=-\Delta s_k\sin(\theta_{\mathrm{mid},k}),\quad
+F_{23}=\Delta s_k\cos(\theta_{\mathrm{mid},k}),
+$$
+
+$$
+F_{14}=-\frac{1}{2}\Delta s_k\Delta t_k
+\sin(\theta_{\mathrm{mid},k}),\quad
+F_{24}=-\frac{1}{2}\Delta s_k\Delta t_k
+\cos(\theta_{\mathrm{mid},k}),\quad
+F_{34}=-\Delta t_k.
+$$
+
+All other entries of $F_k$ are zero. The index pair $F_{ij}$ means the
+sensitivity of state component $i$ to a small change in state component $j$.
 
 The first two rows show how heading uncertainty bends the predicted position.
 The fourth column shows how gyro-bias uncertainty accumulates into heading and
@@ -168,19 +206,18 @@ The process covariance $Q_k$ is assembled from three configured sources:
 More explicitly, the implementation forms two sensitivity vectors:
 
 $$
-G_{\omega,k}=\begin{bmatrix}
--\frac{1}{2}\Delta s_k\Delta t_k\sin(\theta_{\mathrm{mid},k})\\
-\frac{1}{2}\Delta s_k\Delta t_k\cos(\theta_{\mathrm{mid},k})\\
-\Delta t_k\\
-0
-\end{bmatrix},
-\qquad
-G_{v,k}=\begin{bmatrix}
-(1-s)\Delta t_k\cos(\theta_{\mathrm{mid},k})\\
-(1-s)\Delta t_k\sin(\theta_{\mathrm{mid},k})\\
-0\\
-0
-\end{bmatrix}.
+G_{\omega,k}=\left(
+-\frac{1}{2}\Delta s_k\Delta t_k\sin(\theta_{\mathrm{mid},k}),\,
+\frac{1}{2}\Delta s_k\Delta t_k\cos(\theta_{\mathrm{mid},k}),\,
+\Delta t_k,\,0
+\right)^{\mathsf T},
+$$
+
+$$
+G_{v,k}=\left(
+(1-s)\Delta t_k\cos(\theta_{\mathrm{mid},k}),\,
+(1-s)\Delta t_k\sin(\theta_{\mathrm{mid},k}),\,0,\,0
+\right)^{\mathsf T}.
 $$
 
 The process covariance is then calculated as
@@ -188,13 +225,10 @@ The process covariance is then calculated as
 $$
 Q_k=\sigma_{\omega}^{2}G_{\omega,k}G_{\omega,k}^{\mathsf T}
 +\sigma_{v}^{2}G_{v,k}G_{v,k}^{\mathsf T}
-+\begin{bmatrix}
-0&0&0&0\\
-0&0&0&0\\
-0&0&0&0\\
-0&0&0&q_b\Delta t_k
-\end{bmatrix}.
++q_b\Delta t_k\,e_4e_4^{\mathsf T},
 $$
+
+where $e_4=(0,0,0,1)^{\mathsf T}$ selects the gyro-bias state.
 
 Here $\sigma_{\omega}$ is `gyro_rate_noise_std_rad_s`, $\sigma_v$ is
 `wheel_speed_noise_std_m_s`, and $q_b$ is the configured gyro-bias
@@ -213,7 +247,7 @@ run can report a relatively large x/y covariance.
 Wheel yaw measures only the third state component, so the measurement matrix is
 
 $$
-H=\begin{bmatrix}0 & 0 & 1 & 0\end{bmatrix}.
+H=(0,0,1,0).
 $$
 
 The wrapped difference between measurement and predicted yaw is

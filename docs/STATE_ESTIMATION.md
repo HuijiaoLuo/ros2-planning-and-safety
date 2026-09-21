@@ -61,11 +61,7 @@ value is `0.02`; it is not a covariance-derived Kalman gain.
 With `fusion_mode:=adaptive`, the estimator keeps a two-element state:
 
 $$
-\mathbf{x}_k=
-\begin{bmatrix}
-\theta_k\\
-b_{g,k}
-\end{bmatrix},
+\mathbf{x}_k=(\theta_k,\,b_{g,k})^{\mathsf T},
 $$
 
 where $b_{g,k}$ is the estimated gyro bias. The IMU angular rate predicts the
