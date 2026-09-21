@@ -20,6 +20,7 @@ def generate_launch_description():
     scan_delay_s = LaunchConfiguration("scan_delay_s")
     scan_noise_std_m = LaunchConfiguration("scan_noise_std_m")
     scan_noise_seed = LaunchConfiguration("scan_noise_seed")
+    navigation_pose_topic = LaunchConfiguration("navigation_pose_topic")
 
     return LaunchDescription(
         [
@@ -93,6 +94,28 @@ def generate_launch_description():
                 default_value="0.0",
                 description="Optional total evaluation timeout; zero disables it.",
             ),
+            DeclareLaunchArgument(
+                "navigation_pose_topic",
+                default_value="/odom",
+                description=(
+                    "Pose topic consumed by navigation and safety nodes. "
+                    "The default /odom preserves the ideal V2 baseline."
+                ),
+            ),
+            Node(
+                package="robotics_nav",
+                executable="heading_estimator",
+                name="heading_estimator",
+                output="screen",
+                parameters=[
+                    {
+                        "wheel_odom_topic": "/wheel_odom",
+                        "imu_topic": "/imu",
+                        "output_topic": "/state_estimate",
+                        "wheel_weight": 0.02,
+                    }
+                ],
+            ),
             Node(
                 package="robotics_nav",
                 executable="path_follower",
@@ -108,6 +131,7 @@ def generate_launch_description():
                         "final_approach_heading_gain": 1.0,
                         "final_approach_max_angular_speed": 0.60,
                         "heading_deadband": 0.03,
+                        "odom_topic": navigation_pose_topic,
                     }
                 ],
             ),
@@ -133,6 +157,7 @@ def generate_launch_description():
                         "recovery_turn_sign": -1.0,
                         "max_tilt_deg": 10.0,
                         "publish_rate_hz": 20.0,
+                        "odom_topic": navigation_pose_topic,
                     }
                 ],
             ),
@@ -152,6 +177,7 @@ def generate_launch_description():
                         "goal_x": 2.0,
                         "goal_y": 0.0,
                         "robot_radius_m": planning_radius_m,
+                        "odom_topic": navigation_pose_topic,
                     }
                 ],
             ),

@@ -25,6 +25,7 @@ setup(
         "console_scripts": [
             "waypoint_controller = robotics_nav.waypoint_controller:main",
             "path_follower = robotics_nav.path_follower:main",
+            "heading_estimator = robotics_nav.heading_estimator:main",
             "safety_supervisor = robotics_nav.safety_supervisor:main",
             "static_map_publisher = robotics_nav.static_map_publisher:main",
             "global_planner = robotics_nav.global_planner:main",

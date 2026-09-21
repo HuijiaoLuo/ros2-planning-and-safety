@@ -57,6 +57,7 @@ class PathFollower(Node):
         self.declare_parameter("final_approach_heading_gain", 1.0)
         self.declare_parameter("final_approach_max_angular_speed", 0.60)
         self.declare_parameter("heading_deadband", 0.03)
+        self.declare_parameter("odom_topic", "/odom")
         # Grid paths contain sharp 90-degree corners. Rotate before driving
         # through a large heading error instead of cutting the corner.
         self.declare_parameter("rotate_in_place_threshold", math.pi / 6.0)
@@ -82,6 +83,7 @@ class PathFollower(Node):
         self.heading_deadband = float(
             self.get_parameter("heading_deadband").value
         )
+        odom_topic = str(self.get_parameter("odom_topic").value)
         self.rotate_in_place_threshold = float(
             self.get_parameter("rotate_in_place_threshold").value
         )
@@ -103,7 +105,7 @@ class PathFollower(Node):
         )
         self.odom_subscription = self.create_subscription(
             Odometry,
-            "/odom",
+            odom_topic,
             self.odom_callback,
             qos_profile_sensor_data,
         )

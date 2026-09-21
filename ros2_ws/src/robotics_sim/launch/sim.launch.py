@@ -27,6 +27,7 @@ def generate_launch_description():
     scan_delay_s = LaunchConfiguration("scan_delay_s")
     scan_noise_std_m = LaunchConfiguration("scan_noise_std_m")
     scan_noise_seed = LaunchConfiguration("scan_noise_seed")
+    navigation_pose_topic = LaunchConfiguration("navigation_pose_topic")
 
     return LaunchDescription(
         [
@@ -81,6 +82,11 @@ def generate_launch_description():
                 description="Random seed for reproducible LiDAR range noise.",
             ),
             DeclareLaunchArgument(
+                "navigation_pose_topic",
+                default_value="/odom",
+                description="Pose topic consumed by navigation and safety nodes.",
+            ),
+            DeclareLaunchArgument(
                 "safety_margin",
                 default_value="0.15",
                 description="Additional stopping-distance safety margin in metres.",
@@ -112,6 +118,7 @@ def generate_launch_description():
                     "/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist",
                     "/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
                     "/wheel_odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
+                    "/imu@sensor_msgs/msg/Imu[gz.msgs.IMU",
                     "/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
                     "/collision/contacts@ros_gz_interfaces/msg/Contacts[gz.msgs.Contacts",
                 ],
@@ -130,6 +137,7 @@ def generate_launch_description():
                     "scan_delay_s": scan_delay_s,
                     "scan_noise_std_m": scan_noise_std_m,
                     "scan_noise_seed": scan_noise_seed,
+                    "navigation_pose_topic": navigation_pose_topic,
                     "safety_margin": safety_margin,
                     "recovery_timeout_s": recovery_timeout_s,
                     "planning_radius_m": planning_radius_m,

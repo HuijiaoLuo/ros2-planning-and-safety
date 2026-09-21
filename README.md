@@ -46,6 +46,8 @@ The current milestone includes:
 - Python unit tests, C++ tests, and GitHub Actions CI.
 - an offline planner-scaling benchmark for map-size, density, and heuristic sweeps;
 - a read-only ROS2 evaluation logger for closed-loop metrics;
+- a V3 heading-estimation diagnostic using `/wheel_odom` and `/imu` while
+  navigation remains on the validated `/odom` baseline;
 
 The robot has been tested in simulation from the start position to the goal at
 approximately `(2.0, 0.0)`, with a final position error within the configured
@@ -69,9 +71,11 @@ shows the main planning-radius boundary on the current map:
 The `0.40 m` configuration is a marginal boundary case: its single
 successful run took much longer and required sustained safety intervention.
 The time-to-goal value above is therefore calculated from one successful
-seed, not averaged over all three trials. The smallest robust configuration
-tested on this map is therefore
-`planning_radius=0.41 m`. All listed runs were collision-free.
+seed, not averaged over all three trials. Under the tested seeds and
+uncertainty settings, `planning_radius=0.40 m` exhibited boundary behavior,
+while `0.41 m` was the smallest tested radius that achieved consistent
+success. This is an empirical result, not a statistical robustness guarantee.
+All listed runs were collision-free.
 
 ![Robustness summary](docs/assets/robustness_summary.png)
 
@@ -96,6 +100,23 @@ Gazebo differential-drive robot
 
 The green goal marker is visible in Gazebo but excluded from the LiDAR
 visibility mask, so it is not treated as a physical obstacle.
+
+The V2 baseline uses `/odom` for navigation. V3 additionally provides:
+
+```text
+/wheel_odom + /imu → heading_estimator → /state_estimate
+```
+
+Passing `navigation_pose_topic:=/state_estimate` switches the planner,
+controller, and safety layer to the estimated pose, but this full estimated-
+pose navigation mode is not yet part of the validated baseline. The current
+V3 experiment keeps navigation on `/odom` and compares the parallel
+`/state_estimate` output before adding an `x/y` estimator. See
+[`docs/V3_STATE_ESTIMATION.md`](docs/V3_STATE_ESTIMATION.md).
+
+The current heading diagnostic reached the goal with a final error of
+approximately `0.049 m`, zero safety overrides, and no collision while the
+baseline controller remained on `/odom`.
 
 ## Quick start
 
@@ -191,6 +212,7 @@ METHOD_TECH.md        Detailed methods, equations, diagnostics, and roadmap
 See [METHOD_TECH.md](METHOD_TECH.md) for:
 
 - differential-drive and controller equations;
+- the first V3 state-estimation milestone;
 - planner and safety-supervisor logic;
 - ROS2 topic flow and launch sequence;
 - parameter meanings and validation protocol;

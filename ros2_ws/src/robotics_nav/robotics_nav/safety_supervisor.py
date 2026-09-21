@@ -44,6 +44,7 @@ class SafetySupervisor(Node):
         self.declare_parameter("recovery_turn_sign", -1.0)
         self.declare_parameter("max_tilt_deg", 10.0)
         self.declare_parameter("publish_rate_hz", 20.0)
+        self.declare_parameter("odom_topic", "/odom")
 
         self.max_deceleration = float(self.get_parameter("max_deceleration").value)
         self.sensor_latency = float(self.get_parameter("sensor_latency").value)
@@ -81,6 +82,7 @@ class SafetySupervisor(Node):
             float(self.get_parameter("max_tilt_deg").value)
         )
         publish_rate = float(self.get_parameter("publish_rate_hz").value)
+        odom_topic = str(self.get_parameter("odom_topic").value)
 
         self.publisher = self.create_publisher(Twist, "/cmd_vel", 10)
         self.override_publisher = self.create_publisher(
@@ -102,7 +104,7 @@ class SafetySupervisor(Node):
         )
         self.odom_subscription = self.create_subscription(
             Odometry,
-            "/odom",
+            odom_topic,
             self.odom_callback,
             qos_profile_sensor_data,
         )

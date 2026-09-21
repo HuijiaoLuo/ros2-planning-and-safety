@@ -36,11 +36,13 @@ class GlobalPlanner(Node):
         # for grid discretization and tracking error.
         self.declare_parameter("robot_radius_m", 0.35)
         self.declare_parameter("occupied_threshold", 50)
+        self.declare_parameter("odom_topic", "/odom")
 
         self.goal_x = float(self.get_parameter("goal_x").value)
         self.goal_y = float(self.get_parameter("goal_y").value)
         self.robot_radius_m = float(self.get_parameter("robot_radius_m").value)
         self.occupied_threshold = int(self.get_parameter("occupied_threshold").value)
+        odom_topic = str(self.get_parameter("odom_topic").value)
 
         map_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -63,7 +65,7 @@ class GlobalPlanner(Node):
         )
         self.odom_subscription = self.create_subscription(
             Odometry,
-            "/odom",
+            odom_topic,
             self.odom_callback,
             qos_profile_sensor_data,
         )

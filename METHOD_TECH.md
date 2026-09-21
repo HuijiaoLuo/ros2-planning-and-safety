@@ -22,6 +22,12 @@ This is not yet a complete autonomous navigation stack. In the current stage:
 - the global map and SLAM are not used yet;
 - Nav2 is not used yet.
 
+The V2 baseline deliberately uses Gazebo's ideal `/odom` pose so that planner
+and safety experiments can be interpreted independently. V3 adds a separate
+`/state_estimate` topic from wheel odometry and IMU heading fusion. When V3 is
+enabled, navigation consumes `/state_estimate` while `/odom` remains an
+evaluation-only ground-truth stream.
+
 The important engineering chain is:
 
 $$
@@ -54,6 +60,7 @@ C++ planning core
 ROS2 control layer
     ├── path_follower
     ├── waypoint_controller baseline
+    ├── heading_estimator (V3)
     └── safety_supervisor
 
 ROS2 planning layer
@@ -107,11 +114,11 @@ where $L$ is the distance between the wheel contact points. Gazebo's DiffDrive s
 ## 4. ROS2 computation graph
 
 ~~~
-                         /odom
+                 /odom (V2) or /state_estimate (V3)
                            │
                            ▼
                  ┌────────────────────┐
-                 │ waypoint_controller│
+                 │   path_follower    │
                  └─────────┬──────────┘
                            │
                     /cmd_vel_raw
@@ -131,6 +138,8 @@ where $L$ is the distance between the wheel contact points. Gazebo's DiffDrive s
 |---|---|---|---|
 | /odom | nav_msgs/msg/Odometry | Gazebo → ROS2 | Ground-truth pose for the ideal MVP |
 | /wheel_odom | nav_msgs/msg/Odometry | Gazebo → ROS2 | DiffDrive wheel odometry for slip comparison |
+| /imu | sensor_msgs/msg/Imu | Gazebo → ROS2 | Angular velocity used by the V3 heading estimator |
+| /state_estimate | nav_msgs/msg/Odometry | Estimator → navigation | Wheel position with fused heading; optional V3 input |
 | /scan | sensor_msgs/msg/LaserScan | Gazebo → ROS2 | LiDAR range measurements |
 | /cmd_vel_raw | geometry_msgs/msg/Twist | Controller → safety layer | Unchecked motion request |
 | /cmd_vel | geometry_msgs/msg/Twist | Safety layer → Gazebo | Command allowed to reach robot |
@@ -140,9 +149,9 @@ The distinction between /cmd_vel_raw and /cmd_vel is important. It makes the saf
 The simulation deliberately exposes two pose sources. The ideal-navigation
 MVP uses `/odom`, generated from Gazebo's true model pose, so planning and
 control are not invalidated by wheel slip before the basic loop is verified.
-The DiffDrive plugin publishes `/wheel_odom` separately. Comparing these two
-topics makes collision-induced odometry error observable and creates a clean
-transition to the later noisy-localization experiments.
+The DiffDrive plugin publishes `/wheel_odom` separately. V3 adds an IMU and a
+transparent heading estimator; `/state_estimate` can then replace `/odom` for
+navigation while `/odom` remains available only to the evaluation logger.
 
 The simulated actuator also has explicit linear and angular velocity and
 acceleration limits. These keep the ideal model physically stable when the
@@ -154,9 +163,66 @@ matters because Gazebo sensor bridges commonly publish with best-effort,
 volatile QoS; a default reliable subscription may be incompatible and receive
 no callbacks even when the topic appears in the graph.
 
+## 4.1 First V3 estimator: wheel odometry plus IMU heading
+
+Gazebo publishes an IMU on `/imu`. The estimator consumes only the IMU angular
+velocity, not its orientation field. This prevents the simulated perfect
+orientation from becoming a hidden ground-truth input.
+
+The gyro heading is integrated as:
+
+$$
+\theta^{\mathrm{imu}}_{k+1}
+=
+\mathrm{wrap}\left(
+\theta^{\mathrm{imu}}_k + \omega_{z,k}\Delta t
+\right)
+$$
+
+The current fused state is then slowly corrected toward wheel-odometry yaw:
+
+$$
+\theta^{\mathrm{fused}}_k
+=
+\mathrm{wrap}\left(
+\theta^{\mathrm{fused}}_k
++
+\lambda\,\mathrm{wrap}\left(
+\theta^{\mathrm{wheel}}_k-
+\theta^{\mathrm{fused}}_k
+\right)
+\right)
+$$
+
+The default `\lambda=0.02` is a transparent tuning parameter. It gives the
+gyro short-term responsiveness while allowing wheel yaw to limit long-term
+drift; it is not a covariance-derived EKF gain. The first estimator publishes
+wheel-odometry `x` and `y` together with the fused heading on `/state_estimate`.
+
+The V2-compatible launch leaves all navigation nodes on `/odom`:
+
+```bash
+ros2 launch robotics_sim sim.launch.py \
+  navigation_pose_topic:=/odom
+```
+
+The explicit V3 experiment switches the planner, follower, and safety layer:
+
+```bash
+ros2 launch robotics_sim sim.launch.py \
+  navigation_pose_topic:=/state_estimate \
+  experiment_timeout_s:=120.0 \
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v3_heading_fusion.csv
+```
+
+This first milestone is intentionally not an EKF. Bias, white noise, wheel
+slip, covariance handling, and RMSE reporting are the next controlled steps.
+
 ## 5. Waypoint controller
 
-The controller reads the current pose from /odom and uses a fixed goal.
+The controller reads the current pose from `/odom` in V2, or from
+`/state_estimate` when the V3 launch override is enabled, and uses a fixed
+goal.
 
 Distance to goal:
 
@@ -845,8 +911,9 @@ stochastic and operationally poor. Its one successful seed took `462.93 s`,
 triggered 89 safety overrides, and reached a measured minimum clearance of
 `0.485 m`; the other two seeds did not reach the goal. By contrast, all three
 `0.41 m` seeds succeeded in approximately 71 s without sustained safety
-intervention. We therefore use `0.41 m` as the smallest tested *robust*
-planning radius for this map and noise level.
+intervention. Under these tested seeds, `0.41 m` was the smallest tested
+planning radius that achieved consistent success. This is an empirical
+boundary result, not a statistical robustness guarantee.
 
 At the higher noise level `scan_noise_std_m=0.05 m`, the `0.40 m` radius
 failed for all three seeds (`0/3`). The mean safety override ratio was `0.764`
@@ -915,15 +982,16 @@ The current ROS2 milestone includes:
 - ordered path following for the differential-drive robot;
 - LiDAR-based safety supervision with a speed-dependent stopping envelope;
 - clearance hysteresis, latched recovery turning, and a tilt guard;
+- a first V3 heading estimator combining `/wheel_odom` and `/imu`;
 - a Gazebo goal marker that remains visible but is excluded from the LiDAR mask.
 
 The next layers are intentionally separated so that each experiment remains
 interpretable:
 
-- V3: richer reactive obstacle avoidance and local planning;
-- V4: LiDAR noise, odometry drift, actuator saturation, and control latency;
-- V5: Monte Carlo validation of collision rate, clearance, and intervention count;
-- V6: IMU and wheel-odometry fusion with covariance handling;
+- V3: heading estimation from IMU and wheel odometry, then pose RMSE and drift;
+- V4: configurable bias, white noise, wheel slip, and covariance handling;
+- V5: Monte Carlo validation of localization-to-safety failure propagation;
+- V6: covariance-aware EKF and comparison with the transparent estimator;
 - V7: SLAM and Nav2 integration;
 - V8: camera-based safety events and perception/sensor fusion.
 
