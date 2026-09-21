@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from collections import Counter
 from pathlib import Path
 from statistics import mean
 from typing import Iterable
@@ -32,6 +33,10 @@ OUTPUT_FIELDS = (
     "seed_count",
     "seeds",
     "successes",
+    "goal_reached_count",
+    "experiment_timeout_count",
+    "manual_interrupt_count",
+    "unknown_termination_count",
     "success_rate",
     "collision_count",
     "collision_rate_known",
@@ -65,6 +70,14 @@ def bool_value(row: dict[str, str], name: str) -> bool:
     return row.get(name, "").strip().lower() == "true"
 
 
+def termination_reason(row: dict[str, str]) -> str:
+    """Return an explicit reason, with a safe fallback for legacy reports."""
+    value = row.get("termination_reason", "").strip()
+    if value:
+        return value
+    return "goal_reached" if bool_value(row, "success") else "unknown"
+
+
 def normalized_config(row: dict[str, str]) -> tuple[float, ...]:
     """Return a stable grouping key, including defaults for older CSV files."""
     return tuple(round(float_value(row, name), 9) for name in CONFIG_FIELDS)
@@ -87,6 +100,7 @@ def summary_for_rows(rows: list[dict[str, str]]) -> dict[str, object]:
 
     config = normalized_config(rows[0])
     successes = sum(bool_value(row, "success") for row in rows)
+    termination_counts = Counter(termination_reason(row) for row in rows)
     collision_values = [
         row.get("collision", "").strip().lower()
         for row in rows
@@ -145,6 +159,10 @@ def summary_for_rows(rows: list[dict[str, str]]) -> dict[str, object]:
             "seed_count": len(seeds),
             "seeds": ",".join(seeds),
             "successes": successes,
+            "goal_reached_count": termination_counts["goal_reached"],
+            "experiment_timeout_count": termination_counts["experiment_timeout"],
+            "manual_interrupt_count": termination_counts["manual_interrupt"],
+            "unknown_termination_count": termination_counts["unknown"],
             "success_rate": successes / len(rows),
             "collision_count": collision_count,
             "collision_rate_known": (
@@ -222,6 +240,10 @@ def print_summary(summaries: list[dict[str, object]]) -> None:
         "radius",
         "runs",
         "success",
+        "goal",
+        "timeout",
+        "manual",
+        "unknown",
         "success_rate",
         "mean_goal_s",
         "mean_clearance_m",
@@ -239,6 +261,10 @@ def print_summary(summaries: list[dict[str, object]]) -> None:
             format_value(row["configured_planning_radius_m"]),
             format_value(row["runs"]),
             f"{row['successes']}/{row['runs']}",
+            format_value(row["goal_reached_count"]),
+            format_value(row["experiment_timeout_count"]),
+            format_value(row["manual_interrupt_count"]),
+            format_value(row["unknown_termination_count"]),
             format_value(row["success_rate"]),
             format_value(row["mean_time_to_goal_s"]),
             format_value(row["mean_minimum_clearance_m"]),

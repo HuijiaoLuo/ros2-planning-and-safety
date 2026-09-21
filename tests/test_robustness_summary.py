@@ -21,6 +21,7 @@ class RobustnessSummaryTests(unittest.TestCase):
             "safety_override_ratio": "0.01",
             "path_efficiency": "1.02",
             "configured_scan_noise_seed": "1",
+            "termination_reason": "goal_reached",
         }
         successful = {
             **common,
@@ -33,6 +34,7 @@ class RobustnessSummaryTests(unittest.TestCase):
             "time_to_goal_s": "",
             "collision": "false",
             "configured_scan_noise_seed": "2",
+            "termination_reason": "experiment_timeout",
         }
 
         [summary] = summarize([successful, incomplete])
@@ -40,6 +42,10 @@ class RobustnessSummaryTests(unittest.TestCase):
         self.assertEqual(summary["runs"], 2)
         self.assertEqual(summary["seed_count"], 2)
         self.assertEqual(summary["successes"], 1)
+        self.assertEqual(summary["goal_reached_count"], 1)
+        self.assertEqual(summary["experiment_timeout_count"], 1)
+        self.assertEqual(summary["manual_interrupt_count"], 0)
+        self.assertEqual(summary["unknown_termination_count"], 0)
         self.assertEqual(summary["success_rate"], 0.5)
         self.assertEqual(summary["mean_time_to_goal_s"], 70.0)
         self.assertEqual(summary["collision_count"], 0)

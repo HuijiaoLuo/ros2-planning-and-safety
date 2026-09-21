@@ -167,7 +167,7 @@ $$
 Desired heading:
 
 $$
-\theta_g = \mathrm{atan2}(y_g-y, x_g-x)
+\theta_g = \mathrm{atan2}(y_g-y,\,x_g-x)
 $$
 
 Wrapped heading error:
@@ -179,12 +179,11 @@ $$
 The proportional command is:
 
 $$
-v = \mathrm{clip}(K_d e_d, 0, v_{max})
+v = \mathrm{clip}(K_d e_d,\,0,\,v_{\max})
 $$
 
 $$
-\omega = \mathrm{clip}(K_\theta e_\theta,
--\omega_{max}, \omega_{max})
+\omega = \mathrm{clip}(K_\theta e_\theta,\,-\omega_{\max},\,\omega_{\max})
 $$
 
 There is one practical rule in addition to the equations:
@@ -252,7 +251,7 @@ through the standard `map → odom → base_link` chain.
 The supervisor examines LiDAR rays in a forward angular sector. It obtains the closest valid forward measurement d_front and compares it with a speed-dependent stopping envelope.
 
 $$
-d_{stop} = \frac{v^2}{2a_{max}} + v\tau + d_{margin}
+d_{\mathrm{stop}} = \frac{v^2}{2a_{\max}} + v\tau + d_{\mathrm{margin}}
 $$
 
 The terms represent:
@@ -292,12 +291,15 @@ the closest valid return:
 $$
 d_{\mathrm{front}}(t)
 =
-\min_{\lvert \alpha_i \rvert \le 60^\circ} r_i(t)
+\min_{\{i:\,|\alpha_i|\le 60^\circ\}} r_i(t)
 $$
 
-Here, `r_i` is the distance from the LiDAR origin to the first surface hit by
-ray `i`, and `alpha_i` is the ray's angle relative to the robot. It is therefore
-not automatically the distance from the robot's outer body to the obstacle.
+Here, $r_i(t)$ is the distance from the LiDAR origin to the first surface hit by
+ray $i$, and $\alpha_i$ is that ray's angle relative to the robot. The set in
+the minimum selects only ray indices inside the forward sector; the
+implementation also rejects NaN and out-of-range readings. This value is
+therefore not automatically the distance from the robot's outer body to the
+obstacle.
 
 In the current Gazebo model, the LiDAR is centered in the robot footprint and
 the base collision box has dimensions `0.50 m × 0.36 m`. For a flat wall
@@ -884,7 +886,10 @@ seeds visible, and reports success rate, collision count, mean and 95th
 percentile time-to-goal, clearance, and safety-override statistics. Legacy
 CSV files without the complete configuration columns are skipped so
 that missing values are not mistaken for a real zero-delay or zero-noise
-experiment. The summary is generated data and remains ignored by Git.
+experiment. It also counts `goal_reached`, `experiment_timeout`, and
+`manual_interrupt` termination reasons; older reports without that field are
+classified as `goal_reached` when successful and `unknown` otherwise. The
+summary is generated data and remains ignored by Git.
 
 To render the current summary as a four-panel figure for the project
 documentation:
