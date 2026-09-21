@@ -186,6 +186,7 @@ class EvaluationLogger(Node):
             rclpy.shutdown()
 
     def check_experiment_timeout(self) -> None:
+        """Terminate bounded experiments without sending a motion command."""
         if (
             self.configured_experiment_timeout <= 0.0
             or self.started_at is None
@@ -202,6 +203,7 @@ class EvaluationLogger(Node):
         self.latest_navigation_pose = message
 
     def plan_callback(self, message: NavPath) -> None:
+        """Track the initial/latest rasterized plan and its endpoint."""
         self.latest_plan = message
         self.plan_update_count += 1
         if not message.poses:
@@ -245,6 +247,12 @@ class EvaluationLogger(Node):
         return math.atan2(sin_yaw, cos_yaw)
 
     def front_clearance(self, scan: LaserScan) -> Optional[float]:
+        """Return the closest valid LiDAR range inside the front sector.
+
+        The value is measured from the LiDAR origin, not from the robot body.
+        Infinite rays are retained as evidence that the sector was observed but
+        contained no finite obstacle return.
+        """
         if scan.angle_increment == 0.0:
             return None
 
@@ -265,6 +273,7 @@ class EvaluationLogger(Node):
         return scan.range_max if saw_clear_ray else None
 
     def sample(self) -> None:
+        """Accumulate one evaluation sample without influencing control."""
         if self.latest_odom is None:
             return
 
@@ -277,6 +286,9 @@ class EvaluationLogger(Node):
         position = self.latest_odom.pose.pose.position
         current_x, current_y = position.x, position.y
 
+        # Travelled distance is the measured odometry polyline length.  It is
+        # intentionally separate from the initial grid-plan length because the
+        # executed controller follows a continuous trajectory.
         if self.start_x is None:
             self.start_x, self.start_y = current_x, current_y
             self.started_at = now
@@ -324,6 +336,9 @@ class EvaluationLogger(Node):
                 self.safety_override_time += delta_time
             self.override_active = self.latest_override_state
 
+        # Always compute physical success from /odom.  A configurable
+        # navigation pose is logged separately so false estimated-goal
+        # completion remains visible instead of being counted as success.
         navigation_pose = (
             self.latest_odom
             if self.navigation_pose_topic == "/odom"
@@ -402,6 +417,7 @@ class EvaluationLogger(Node):
             self.finish_run("goal_reached")
 
     def result(self) -> dict[str, object]:
+        """Return one CSV-ready row with physical and navigation-pose metrics."""
         now = time.monotonic()
         final_error: Optional[float] = None
         if (
@@ -485,6 +501,8 @@ class EvaluationLogger(Node):
             "latest_planned_path_length_m": self.latest_planned_path_length,
             "plan_update_count": self.plan_update_count,
             "travelled_distance_m": self.travelled_distance,
+            # Efficiency is undefined for incomplete runs: partial travel is
+            # not comparable with the full initial plan length.
             "path_efficiency": (
                 None
                 if self.goal_reached_at is None
@@ -492,6 +510,9 @@ class EvaluationLogger(Node):
                 or self.travelled_distance <= 0.0
                 else self.initial_planned_path_length / self.travelled_distance
             ),
+            # This ratio is descriptive only.  A continuous trajectory can cut
+            # grid corners, so a value below one does not mean A* found a
+            # shorter discrete path.
             "path_length_ratio": (
                 None
                 if self.goal_reached_at is None

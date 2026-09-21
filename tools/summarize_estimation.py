@@ -75,7 +75,12 @@ def optional_float(row: dict[str, str], name: str) -> float | None:
 
 
 def normalized_config(row: dict[str, str]) -> tuple[object, ...]:
-    """Return a stable grouping key for the estimator configuration."""
+    """Return a stable grouping key for the estimator configuration.
+
+    Defaults preserve comparability with older CSV files, while the rounded
+    numeric tuple prevents harmless floating-point formatting differences from
+    splitting one experimental condition into multiple groups.
+    """
     values: list[object] = []
     for name in CONFIG_FIELDS:
         if name in {
@@ -129,6 +134,7 @@ def values_for(rows: list[dict[str, str]], field: str) -> list[float]:
 
 
 def summary_for_rows(rows: list[dict[str, str]]) -> dict[str, object]:
+    """Average metrics within one controlled estimator configuration."""
     if not rows:
         raise ValueError("Cannot summarize an empty group")
 
@@ -157,6 +163,9 @@ def summary_for_rows(rows: list[dict[str, str]]) -> dict[str, object]:
         means[f"mean_{field}"] = mean(values) if values else None
     summary.update(means)
 
+    # Positive improvement means the fused estimate has lower heading RMSE than
+    # wheel yaw.  A negative value is meaningful: it records a failed tuning or
+    # uncertainty model instead of hiding it behind an absolute value.
     wheel_heading = means["mean_wheel_heading_rmse_rad"]
     estimate_heading = means["mean_estimate_heading_rmse_rad"]
     summary["heading_rmse_improvement_pct"] = (
@@ -180,6 +189,7 @@ def summary_for_rows(rows: list[dict[str, str]]) -> dict[str, object]:
 
 
 def load_rows(paths: Iterable[Path]) -> tuple[list[dict[str, str]], list[Path]]:
+    """Load supported one-row reports and explicitly skip legacy schemas."""
     rows: list[dict[str, str]] = []
     used_paths: list[Path] = []
     for path in paths:

@@ -96,6 +96,7 @@ def percentile(values: list[float], fraction: float) -> float | None:
 
 
 def summary_for_rows(rows: list[dict[str, str]]) -> dict[str, object]:
+    """Aggregate closed-loop outcomes for one complete configuration."""
     if not rows:
         raise ValueError("Cannot summarize an empty group")
 
@@ -117,6 +118,8 @@ def summary_for_rows(rows: list[dict[str, str]]) -> dict[str, object]:
         key=lambda value: int(float(value)),
     )
 
+    # Incomplete runs have no valid time-to-goal.  Excluding those values keeps
+    # the mean interpretable as the time among successful completions.
     time_to_goal = [
         value
         for row in rows
@@ -132,6 +135,8 @@ def summary_for_rows(rows: list[dict[str, str]]) -> dict[str, object]:
         for row in rows
         if (value := optional_float(row, "travelled_distance_m")) is not None
     ]
+    # Path efficiency is deliberately restricted to successful runs because a
+    # partial travelled distance cannot represent the full route.
     successful_efficiency = [
         value
         for row in rows
@@ -195,6 +200,7 @@ def summary_for_rows(rows: list[dict[str, str]]) -> dict[str, object]:
 
 
 def load_rows(paths: Iterable[Path]) -> tuple[list[dict[str, str]], list[Path]]:
+    """Read complete schemas while reporting skipped legacy CSV files."""
     rows: list[dict[str, str]] = []
     used_paths: list[Path] = []
     for path in paths:

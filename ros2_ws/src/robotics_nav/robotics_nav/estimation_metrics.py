@@ -34,6 +34,8 @@ class PoseErrorStats:
         estimate_y: float,
         estimate_heading: float,
     ) -> None:
+        # Heading errors must be circular: +pi and -pi describe the same
+        # orientation, so a direct subtraction would create a false 2*pi error.
         error_x = estimate_x - truth_x
         error_y = estimate_y - truth_y
         error_heading = wrap_angle(estimate_heading - truth_heading)
@@ -45,6 +47,8 @@ class PoseErrorStats:
         self._sum_heading += error_heading
         self._sum_x_sq += error_x * error_x
         self._sum_y_sq += error_y * error_y
+        # Store sums of squares rather than every sample.  This keeps the
+        # logger bounded in memory while preserving exact batch RMSE values.
         self._sum_position_sq += position_squared
         self._sum_heading_sq += error_heading * error_heading
         self.last_position_error = math.sqrt(position_squared)
@@ -67,6 +71,9 @@ class PoseErrorStats:
             }
 
         count = float(self.count)
+        # Bias is the signed mean error; RMSE is the square root of the mean
+        # squared error.  They answer different questions and are both useful
+        # for diagnosing systematic drift.
         return {
             f"{prefix}_samples": self.count,
             f"{prefix}_x_rmse_m": math.sqrt(self._sum_x_sq / count),

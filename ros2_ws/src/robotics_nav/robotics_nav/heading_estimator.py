@@ -126,6 +126,9 @@ class HeadingEstimator(Node):
         if position_mode not in {"wheel_pose", "propagated"}:
             raise ValueError("position_mode must be 'wheel_pose' or 'propagated'")
 
+        # Both modes consume the same wheel and IMU topics.  The fixed mode is
+        # useful as a transparent baseline; adaptive mode additionally tracks
+        # heading/bias covariance and computes a measurement-dependent gain.
         if fusion_mode == "adaptive":
             self.fusion = AdaptiveHeadingFusion(
                 gyro_rate_noise_std_rad_s=gyro_rate_noise,
@@ -143,6 +146,8 @@ class HeadingEstimator(Node):
         else:
             raise ValueError("fusion_mode must be 'fixed' or 'adaptive'")
         self.fusion_mode = fusion_mode
+        # These perturbations are injected at the estimator input boundary.  In
+        # particular, /odom is never used to create the navigation estimate.
         self.gyro_model = GyroMeasurementModel(
             bias_rad_s=gyro_bias,
             noise_std_rad_s=gyro_noise,
@@ -212,6 +217,7 @@ class HeadingEstimator(Node):
             self.last_status = status
 
     def wheel_odom_callback(self, message: Odometry) -> None:
+        """Update wheel yaw and position from one wheel-odometry message."""
         self.latest_wheel_odom = message
         position = message.pose.pose.position
         orientation = message.pose.pose.orientation
@@ -221,6 +227,9 @@ class HeadingEstimator(Node):
             orientation.z,
             orientation.w,
         )
+        # ``wheel_pose`` preserves the measured x/y increments.  ``propagated``
+        # integrates body-forward speed using fused yaw, which exposes a
+        # different position model and makes slip experiments explicit.
         if self.position_mode == "propagated":
             wheel_pose = (position.x, position.y, wheel_yaw)
         else:
@@ -242,6 +251,10 @@ class HeadingEstimator(Node):
             self.latest_wheel_pose = wheel_pose
 
     def imu_callback(self, message: Imu) -> None:
+        """Feed only IMU angular velocity z into the heading estimator."""
+        # The orientation quaternion in sensor_msgs/Imu is deliberately
+        # ignored; using it would make the simulated perfect orientation a
+        # hidden ground-truth input.
         fused_yaw = self.fusion.update_gyro(
             self.gyro_model.apply(message.angular_velocity.z),
             stamp_seconds(message),
@@ -250,12 +263,16 @@ class HeadingEstimator(Node):
             self.latest_fused_yaw = fused_yaw
 
     def publish_estimate(self) -> None:
+        """Publish the current estimated pose and fusion diagnostics."""
         if self.latest_wheel_odom is None or not self.fusion.ready:
             self.report_status("Waiting for wheel odometry and IMU samples.")
             return
         if self.latest_fused_yaw is None:
             return
 
+        # Position comes from the selected wheel model; orientation comes from
+        # the fixed/adaptive heading fusion state.  The message remains an
+        # Odometry-shaped interface so the existing follower can consume it.
         estimate = Odometry()
         estimate.header = self.latest_wheel_odom.header
         estimate.header.frame_id = self.latest_wheel_odom.header.frame_id or "odom"

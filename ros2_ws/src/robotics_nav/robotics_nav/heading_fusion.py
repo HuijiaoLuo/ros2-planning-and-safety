@@ -32,6 +32,8 @@ class GyroMeasurementModel:
         self.random = random.Random(int(seed))
 
     def apply(self, angular_velocity_z: float) -> float:
+        # The seeded generator makes every uncertainty sweep reproducible:
+        # changing the seed changes the realization, not the noise model.
         noise = (
             0.0
             if self.noise_std_rad_s == 0.0
@@ -59,12 +61,17 @@ class WheelSlipMeasurementModel:
         """Return the perturbed pose for the next raw wheel-odometry pose."""
         raw = (float(x), float(y), wrap_angle(float(yaw)))
         if self._last_raw is None or self._estimate is None:
+            # The first sample defines the estimator's initial frame.  No
+            # artificial slip is applied to the initial absolute pose.
             self._last_raw = raw
             self._estimate = raw
             return self._estimate
 
         last_x, last_y, last_yaw = self._last_raw
         estimate_x, estimate_y, estimate_yaw = self._estimate
+        # Slip is applied to translation increments only.  The yaw increment
+        # remains available so this experiment isolates position drift from
+        # heading drift.
         self._estimate = (
             estimate_x + self.translation_scale * (raw[0] - last_x),
             estimate_y + self.translation_scale * (raw[1] - last_y),
@@ -121,6 +128,8 @@ class DifferentialDrivePoseModel:
         if not 0.0 < delta_time <= 1.0:
             return self._x, self._y, fused_yaw
 
+        # Midpoint integration reduces the first-order error caused by using
+        # either the old or new heading for the complete time interval.
         delta_heading = wrap_angle(fused_yaw - previous_heading)
         midpoint_heading = wrap_angle(previous_heading + 0.5 * delta_heading)
         distance = (
@@ -165,6 +174,8 @@ class HeadingFusion:
         if self.fused_yaw is None:
             self.fused_yaw = wheel_yaw
         else:
+            # Wheel yaw is a low-rate reference.  Fixed fusion deliberately
+            # uses a transparent blend instead of pretending to be an EKF.
             self.last_innovation = wrap_angle(wheel_yaw - self.fused_yaw)
             self.fused_yaw = blend_angles(
                 self.fused_yaw,
@@ -183,6 +194,8 @@ class HeadingFusion:
             dt = stamp - self.last_imu_stamp
             # Ignore duplicate, backwards, or implausibly old timestamps.
             if 0.0 < dt <= 1.0:
+                # Integrate only the IMU angular velocity.  The IMU orientation
+                # field is intentionally not consumed as a hidden oracle.
                 self.imu_yaw = wrap_angle(
                     self.imu_yaw + angular_velocity_z * dt
                 )
@@ -244,6 +257,9 @@ class AdaptiveHeadingFusion:
         self.last_gain = 0.0
         self.last_innovation = 0.0
         self.wheel_yaw: float | None = None
+        # This is the covariance of the predicted-vs-wheel innovation.  It is
+        # not a direct sensor-noise measurement; it is a bounded heuristic used
+        # to adapt the wheel-yaw variance when innovations become persistent.
         self.innovation_variance_estimate = (
             self.heading_variance + self.wheel_yaw_variance
         )
@@ -272,6 +288,10 @@ class AdaptiveHeadingFusion:
 
         innovation = wrap_angle(wheel_yaw - self.heading)
         if self.adaptive_wheel_noise:
+            # Estimate recent innovation energy, subtract the predicted heading
+            # variance, and clip the inferred wheel variance to configured
+            # physical bounds.  This prevents one bad sample from making the
+            # filter permanently ignore wheel yaw.
             rate = self.wheel_noise_adaptation_rate
             self.innovation_variance_estimate = (
                 (1.0 - rate) * self.innovation_variance_estimate
@@ -289,6 +309,8 @@ class AdaptiveHeadingFusion:
                     + rate * inferred_measurement_variance,
                 ),
             )
+        # Scalar Kalman-style update for the heading component.  The cross
+        # covariance couples the heading correction to the gyro-bias estimate.
         innovation_variance = self.heading_variance + self.wheel_yaw_variance
         gain_heading = self.heading_variance / innovation_variance
         gain_bias = self.cross_variance / innovation_variance
@@ -319,11 +341,16 @@ class AdaptiveHeadingFusion:
         if self.last_imu_stamp is not None:
             dt = stamp - self.last_imu_stamp
             if 0.0 < dt <= 1.0:
+                # Prediction: gyro rate advances heading, while the current
+                # bias estimate is subtracted from the measured rate.
                 self.heading = wrap_angle(
                     self.heading + (angular_velocity_z - self.bias) * dt
                 )
                 old_heading_variance = self.heading_variance
                 old_cross_variance = self.cross_variance
+                # Propagate the 2x2 covariance terms for [heading, bias].
+                # Rate noise grows heading uncertainty with dt^2; bias random
+                # walk grows the bias variance over time.
                 self.heading_variance = max(
                     1.0e-12,
                     old_heading_variance

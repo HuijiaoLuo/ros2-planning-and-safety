@@ -258,6 +258,13 @@ class EstimationLogger(Node):
         )
 
     def sample(self) -> None:
+        """Add one time-aligned comparison sample to the three accumulators.
+
+        Ground-truth `/odom` is used only here for evaluation.  The estimator
+        itself receives wheel odometry and IMU data through separate topics.
+        Reusing a truth timestamp prevents the logger timer from counting the
+        same truth message repeatedly when callbacks arrive at different rates.
+        """
         if (
             self.latest_truth is None
             or self.latest_wheel is None
@@ -270,6 +277,8 @@ class EstimationLogger(Node):
             return
         self.last_truth_stamp = truth_stamp
 
+        # Compare every estimate with the same physical reference pose.  The
+        # IMU comparison keeps wheel x/y only so its heading error is isolated.
         truth = self.pose_values(self.latest_truth)
         wheel = self.pose_values(self.latest_wheel)
         estimate = self.pose_values(self.latest_estimate)
@@ -286,6 +295,7 @@ class EstimationLogger(Node):
             )
 
     def result(self) -> dict[str, object]:
+        """Return aggregate diagnostics for wheel, gyro-only, and fused pose."""
         result: dict[str, object] = {}
         result.update(self.wheel_stats.summary("wheel"))
         result.update(self.imu_stats.summary("imu"))
@@ -294,6 +304,7 @@ class EstimationLogger(Node):
         return result
 
     def write_report(self) -> None:
+        """Print and optionally write one reproducible estimator CSV row."""
         if self.report_written:
             return
         self.report_written = True
