@@ -34,7 +34,12 @@ clearance threshold and the speed-dependent stopping envelope. See
 
 ## Current status
 
-The current milestone includes:
+The current V2 milestone is frozen as a reproducible planning and safety
+baseline. The repository also contains an explicitly separated V3 estimation
+and V4 localization workstream; these are not silently presented as validated
+navigation replacements.
+
+The current implementation includes:
 
 - Python and C++ implementations of DFS, BFS, Dijkstra, Greedy Best-First, and A*;
 - path, runtime, and expanded-node benchmarks;
@@ -48,6 +53,11 @@ The current milestone includes:
 - a read-only ROS2 evaluation logger for closed-loop metrics;
 - a V3 heading-estimation diagnostic using `/wheel_odom` and `/imu` while
   navigation remains on the validated `/odom` baseline;
+- an evaluation-only V3 estimator logger reporting wheel and fused-pose RMSE;
+- seeded gyro bias/noise, wheel-slip, adaptive fusion, and propagated-position
+  experiments with configuration values recorded in CSV output;
+- a gated LiDAR-to-static-map localizer with persistent `map → odom` state and
+  diagnostic match-status topics;
 
 The robot has been tested in simulation from the start position to the goal at
 approximately `(2.0, 0.0)`, with a final position error within the configured
@@ -107,16 +117,44 @@ The V2 baseline uses `/odom` for navigation. V3 additionally provides:
 /wheel_odom + /imu → heading_estimator → /state_estimate
 ```
 
+An optional V3.6 localizer adds a known-map position correction:
+
+```text
+/state_estimate + /scan + /map
+        ↓
+ lidar_localizer → persistent map→odom correction → /localized_estimate
+```
+
 Passing `navigation_pose_topic:=/state_estimate` switches the planner,
 controller, and safety layer to the estimated pose, but this full estimated-
-pose navigation mode is not yet part of the validated baseline. The current
-V3 experiment keeps navigation on `/odom` and compares the parallel
-`/state_estimate` output before adding an `x/y` estimator. See
+pose navigation mode is not part of the validated baseline. The V3 experiments
+show that wheel odometry can trigger false goal completion because its global
+position drifts from `/odom`. The LiDAR localizer is an opt-in experiment and
+is not yet a validated SLAM replacement. It now keeps a stateful `map→odom`
+correction and can broadcast it on TF, but remains diagnostic-only until
+covariance-aware validation is complete. See
 [`docs/V3_STATE_ESTIMATION.md`](docs/V3_STATE_ESTIMATION.md).
 
 The current heading diagnostic reached the goal with a final error of
 approximately `0.049 m`, zero safety overrides, and no collision while the
-baseline controller remained on `/odom`.
+baseline controller remained on `/odom`. The static occupancy grid is now
+published in the `map` frame; in the baseline, `map` and Gazebo odometry are
+numerically aligned, while the optional localizer provides the standard
+`map → odom → base_link` transform.
+
+### V3/V4 validation status
+
+The estimator compares `/wheel_odom`, pure gyro integration, and
+`/state_estimate` against `/odom` without feeding `/odom` into the estimator.
+An estimator-only navigation check reached the estimated-pose tolerance, but
+the physical `/odom` pose was still approximately `0.160 m` from the goal when
+the experiment timeout ended. This is a documented false-goal-completion case,
+not a successful physical navigation result.
+
+The LiDAR localizer remains diagnostic-only. No-slip and denser-scan trials
+produced inconsistent candidate corrections, so the next step is to improve
+the scan observation model and add observability/uncertainty diagnostics before
+using `/localized_estimate` for closed-loop navigation.
 
 ## Quick start
 
@@ -133,6 +171,10 @@ python tools/planner_scaling_benchmark.py \
   --sizes 20,50 \
   --densities 0,0.1 \
   --seed-count 2
+
+python tools/summarize_estimation.py \
+  --glob "results/v3_*_metrics.csv" \
+  --output results/estimation_summary.csv
 ```
 
 ### C++ planning core

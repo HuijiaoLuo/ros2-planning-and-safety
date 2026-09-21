@@ -28,6 +28,77 @@ def generate_launch_description():
     scan_noise_std_m = LaunchConfiguration("scan_noise_std_m")
     scan_noise_seed = LaunchConfiguration("scan_noise_seed")
     navigation_pose_topic = LaunchConfiguration("navigation_pose_topic")
+    estimation_output = LaunchConfiguration("estimation_output")
+    imu_gyro_bias_rad_s = LaunchConfiguration("imu_gyro_bias_rad_s")
+    imu_gyro_noise_std_rad_s = LaunchConfiguration("imu_gyro_noise_std_rad_s")
+    imu_gyro_noise_seed = LaunchConfiguration("imu_gyro_noise_seed")
+    wheel_slip_ratio = LaunchConfiguration("wheel_slip_ratio")
+    position_mode = LaunchConfiguration("position_mode")
+    localization_output_topic = LaunchConfiguration("localization_output_topic")
+    localization_search_radius_m = LaunchConfiguration("localization_search_radius_m")
+    localization_search_step_m = LaunchConfiguration("localization_search_step_m")
+    localization_scan_stride = LaunchConfiguration("localization_scan_stride")
+    localization_publish_rate_hz = LaunchConfiguration(
+        "localization_publish_rate_hz"
+    )
+    localization_max_correction_m = LaunchConfiguration(
+        "localization_max_correction_m"
+    )
+    localization_max_match_score_m = LaunchConfiguration(
+        "localization_max_match_score_m"
+    )
+    localization_correction_smoothing = LaunchConfiguration(
+        "localization_correction_smoothing"
+    )
+    localization_minimum_consecutive_matches = LaunchConfiguration(
+        "localization_minimum_consecutive_matches"
+    )
+    localization_candidate_consistency_m = LaunchConfiguration(
+        "localization_candidate_consistency_m"
+    )
+    localization_map_frame_id = LaunchConfiguration("localization_map_frame_id")
+    localization_odom_frame_id = LaunchConfiguration("localization_odom_frame_id")
+    localization_broadcast_map_odom_tf = LaunchConfiguration(
+        "localization_broadcast_map_odom_tf"
+    )
+    localization_yaw_search_radius_rad = LaunchConfiguration(
+        "localization_yaw_search_radius_rad"
+    )
+    localization_yaw_search_step_rad = LaunchConfiguration(
+        "localization_yaw_search_step_rad"
+    )
+    localization_yaw_prior_weight = LaunchConfiguration(
+        "localization_yaw_prior_weight"
+    )
+    localization_max_heading_correction_rad = LaunchConfiguration(
+        "localization_max_heading_correction_rad"
+    )
+    localization_minimum_score_improvement_m = LaunchConfiguration(
+        "localization_minimum_score_improvement_m"
+    )
+    wheel_weight = LaunchConfiguration("wheel_weight")
+    fusion_mode = LaunchConfiguration("fusion_mode")
+    gyro_rate_noise_std_rad_s = LaunchConfiguration("gyro_rate_noise_std_rad_s")
+    wheel_yaw_noise_std_rad = LaunchConfiguration("wheel_yaw_noise_std_rad")
+    gyro_bias_random_walk_std_rad_s2 = LaunchConfiguration(
+        "gyro_bias_random_walk_std_rad_s2"
+    )
+    initial_heading_variance_rad2 = LaunchConfiguration(
+        "initial_heading_variance_rad2"
+    )
+    initial_bias_variance_rad2_s2 = LaunchConfiguration(
+        "initial_bias_variance_rad2_s2"
+    )
+    adaptive_wheel_noise = LaunchConfiguration("adaptive_wheel_noise")
+    wheel_yaw_noise_min_std_rad = LaunchConfiguration(
+        "wheel_yaw_noise_min_std_rad"
+    )
+    wheel_yaw_noise_max_std_rad = LaunchConfiguration(
+        "wheel_yaw_noise_max_std_rad"
+    )
+    wheel_noise_adaptation_rate = LaunchConfiguration(
+        "wheel_noise_adaptation_rate"
+    )
 
     return LaunchDescription(
         [
@@ -87,6 +158,202 @@ def generate_launch_description():
                 description="Pose topic consumed by navigation and safety nodes.",
             ),
             DeclareLaunchArgument(
+                "estimation_output",
+                default_value="",
+                description="Optional CSV path for V3 estimator error diagnostics.",
+            ),
+            DeclareLaunchArgument(
+                "imu_gyro_bias_rad_s",
+                default_value="0.0",
+                description="Synthetic gyro bias used by the V3 estimator.",
+            ),
+            DeclareLaunchArgument(
+                "imu_gyro_noise_std_rad_s",
+                default_value="0.0",
+                description="Synthetic gyro white-noise standard deviation.",
+            ),
+            DeclareLaunchArgument(
+                "imu_gyro_noise_seed",
+                default_value="0",
+                description="Seed for reproducible synthetic gyro noise.",
+            ),
+            DeclareLaunchArgument(
+                "wheel_slip_ratio",
+                default_value="0.0",
+                description=(
+                    "Estimator-side fraction of wheel-odometry translation "
+                    "lost to longitudinal slip."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "position_mode",
+                default_value="wheel_pose",
+                description="Estimator position mode: wheel_pose or propagated.",
+            ),
+            DeclareLaunchArgument(
+                "localization_output_topic",
+                default_value="/localized_estimate",
+                description="Output topic for the optional LiDAR-map corrected pose.",
+            ),
+            DeclareLaunchArgument(
+                "localization_search_radius_m",
+                default_value="0.35",
+                description="Local x/y search radius for LiDAR-map matching.",
+            ),
+            DeclareLaunchArgument(
+                "localization_search_step_m",
+                default_value="0.025",
+                description="Grid step for the local LiDAR-map search.",
+            ),
+            DeclareLaunchArgument(
+                "localization_scan_stride",
+                default_value="6",
+                description="Use every Nth LiDAR ray for map matching.",
+            ),
+            DeclareLaunchArgument(
+                "localization_publish_rate_hz",
+                default_value="5.0",
+                description="LiDAR-map corrected pose publish rate.",
+            ),
+            DeclareLaunchArgument(
+                "localization_max_correction_m",
+                default_value="0.15",
+                description=(
+                    "Reject a LiDAR-map match if its position correction "
+                    "exceeds this distance."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "localization_max_match_score_m",
+                default_value="0.12",
+                description=(
+                    "Reject a LiDAR-map match if its range residual exceeds "
+                    "this score threshold."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "localization_correction_smoothing",
+                default_value="0.25",
+                description=(
+                    "Fraction of an accepted LiDAR-map correction applied per "
+                    "update."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "localization_minimum_consecutive_matches",
+                default_value="3",
+                description=(
+                    "Number of consecutive consistent matches required before "
+                    "a correction is applied."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "localization_candidate_consistency_m",
+                default_value="0.05",
+                description=(
+                    "Maximum change in candidate correction between valid "
+                    "matches."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "localization_map_frame_id",
+                default_value="map",
+                description="Parent frame for the persistent map-to-odom correction.",
+            ),
+            DeclareLaunchArgument(
+                "localization_odom_frame_id",
+                default_value="odom",
+                description="Child frame for the persistent map-to-odom correction.",
+            ),
+            DeclareLaunchArgument(
+                "localization_broadcast_map_odom_tf",
+                default_value="true",
+                description="Broadcast the persistent map-to-odom correction on TF.",
+            ),
+            DeclareLaunchArgument(
+                "localization_yaw_search_radius_rad",
+                default_value="0.15",
+                description="Local heading search radius for LiDAR-map matching.",
+            ),
+            DeclareLaunchArgument(
+                "localization_yaw_search_step_rad",
+                default_value="0.05",
+                description="Heading search step for LiDAR-map matching.",
+            ),
+            DeclareLaunchArgument(
+                "localization_yaw_prior_weight",
+                default_value="0.02",
+                description="Prior penalty on heading displacement in matching.",
+            ),
+            DeclareLaunchArgument(
+                "localization_max_heading_correction_rad",
+                default_value="0.25",
+                description="Maximum accepted LiDAR-map heading correction.",
+            ),
+            DeclareLaunchArgument(
+                "localization_minimum_score_improvement_m",
+                default_value="0.005",
+                description=(
+                    "Minimum reduction in mean scan residual required before "
+                    "applying a candidate correction."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "wheel_weight",
+                default_value="0.02",
+                description="Complementary-fusion correction weight applied to wheel yaw.",
+            ),
+            DeclareLaunchArgument(
+                "fusion_mode",
+                default_value="fixed",
+                description="Heading fusion mode: fixed or adaptive.",
+            ),
+            DeclareLaunchArgument(
+                "gyro_rate_noise_std_rad_s",
+                default_value="0.01",
+                description="Gyro rate standard deviation used by adaptive fusion.",
+            ),
+            DeclareLaunchArgument(
+                "wheel_yaw_noise_std_rad",
+                default_value="0.07",
+                description="Wheel yaw standard deviation used by adaptive fusion.",
+            ),
+            DeclareLaunchArgument(
+                "gyro_bias_random_walk_std_rad_s2",
+                default_value="0.001",
+                description="Gyro-bias random-walk standard deviation.",
+            ),
+            DeclareLaunchArgument(
+                "initial_heading_variance_rad2",
+                default_value="0.25",
+                description="Initial heading variance for adaptive fusion.",
+            ),
+            DeclareLaunchArgument(
+                "initial_bias_variance_rad2_s2",
+                default_value="0.01",
+                description="Initial gyro-bias variance for adaptive fusion.",
+            ),
+            DeclareLaunchArgument(
+                "adaptive_wheel_noise",
+                default_value="false",
+                description="Adapt wheel-yaw measurement noise from innovations.",
+            ),
+            DeclareLaunchArgument(
+                "wheel_yaw_noise_min_std_rad",
+                default_value="0.02",
+                description="Lower bound for adaptive wheel-yaw noise standard deviation.",
+            ),
+            DeclareLaunchArgument(
+                "wheel_yaw_noise_max_std_rad",
+                default_value="0.20",
+                description="Upper bound for adaptive wheel-yaw noise standard deviation.",
+            ),
+            DeclareLaunchArgument(
+                "wheel_noise_adaptation_rate",
+                default_value="0.05",
+                description="Exponential update rate for adaptive wheel-yaw noise.",
+            ),
+            DeclareLaunchArgument(
                 "safety_margin",
                 default_value="0.15",
                 description="Additional stopping-distance safety margin in metres.",
@@ -138,6 +405,41 @@ def generate_launch_description():
                     "scan_noise_std_m": scan_noise_std_m,
                     "scan_noise_seed": scan_noise_seed,
                     "navigation_pose_topic": navigation_pose_topic,
+                    "estimation_output": estimation_output,
+                    "imu_gyro_bias_rad_s": imu_gyro_bias_rad_s,
+                    "imu_gyro_noise_std_rad_s": imu_gyro_noise_std_rad_s,
+                    "imu_gyro_noise_seed": imu_gyro_noise_seed,
+                    "wheel_slip_ratio": wheel_slip_ratio,
+                    "position_mode": position_mode,
+                    "localization_output_topic": localization_output_topic,
+                    "localization_search_radius_m": localization_search_radius_m,
+                    "localization_search_step_m": localization_search_step_m,
+                    "localization_scan_stride": localization_scan_stride,
+                    "localization_publish_rate_hz": localization_publish_rate_hz,
+                    "localization_max_correction_m": localization_max_correction_m,
+                    "localization_max_match_score_m": localization_max_match_score_m,
+                    "localization_correction_smoothing": localization_correction_smoothing,
+                    "localization_minimum_consecutive_matches": localization_minimum_consecutive_matches,
+                    "localization_candidate_consistency_m": localization_candidate_consistency_m,
+                    "localization_map_frame_id": localization_map_frame_id,
+                    "localization_odom_frame_id": localization_odom_frame_id,
+                    "localization_broadcast_map_odom_tf": localization_broadcast_map_odom_tf,
+                    "localization_yaw_search_radius_rad": localization_yaw_search_radius_rad,
+                    "localization_yaw_search_step_rad": localization_yaw_search_step_rad,
+                    "localization_yaw_prior_weight": localization_yaw_prior_weight,
+                    "localization_max_heading_correction_rad": localization_max_heading_correction_rad,
+                    "localization_minimum_score_improvement_m": localization_minimum_score_improvement_m,
+                    "wheel_weight": wheel_weight,
+                    "fusion_mode": fusion_mode,
+                    "gyro_rate_noise_std_rad_s": gyro_rate_noise_std_rad_s,
+                    "wheel_yaw_noise_std_rad": wheel_yaw_noise_std_rad,
+                    "gyro_bias_random_walk_std_rad_s2": gyro_bias_random_walk_std_rad_s2,
+                    "initial_heading_variance_rad2": initial_heading_variance_rad2,
+                    "initial_bias_variance_rad2_s2": initial_bias_variance_rad2_s2,
+                    "adaptive_wheel_noise": adaptive_wheel_noise,
+                    "wheel_yaw_noise_min_std_rad": wheel_yaw_noise_min_std_rad,
+                    "wheel_yaw_noise_max_std_rad": wheel_yaw_noise_max_std_rad,
+                    "wheel_noise_adaptation_rate": wheel_noise_adaptation_rate,
                     "safety_margin": safety_margin,
                     "recovery_timeout_s": recovery_timeout_s,
                     "planning_radius_m": planning_radius_m,

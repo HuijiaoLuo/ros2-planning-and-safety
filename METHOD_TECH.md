@@ -7,6 +7,15 @@ This document explains the engineering logic of the project. It answers two ques
 
 The project is deliberately incremental. At each stage, one new uncertainty is added while the rest of the system remains simple enough to reason about.
 
+### Validation checkpoint
+
+V2 is the validated baseline: navigation uses `/odom`, while the safety layer
+uses physical LiDAR measurements and all evaluation results are recorded with
+their launch-time configuration. V3 evaluates wheel/IMU state estimation
+against `/odom` without feeding `/odom` into the estimator. V4 adds a gated
+LiDAR-to-map diagnostic, but its corrected pose is not yet a validated control
+input.
+
 ## 1. Problem definition
 
 The initial problem is intentionally narrow:
@@ -24,9 +33,9 @@ This is not yet a complete autonomous navigation stack. In the current stage:
 
 The V2 baseline deliberately uses Gazebo's ideal `/odom` pose so that planner
 and safety experiments can be interpreted independently. V3 adds a separate
-`/state_estimate` topic from wheel odometry and IMU heading fusion. When V3 is
-enabled, navigation consumes `/state_estimate` while `/odom` remains an
-evaluation-only ground-truth stream.
+`/state_estimate` topic from wheel odometry and IMU heading fusion. The current
+V3 milestone runs that estimator in parallel and evaluates it against `/odom`;
+navigation remains on `/odom` until the estimated `x,y` state is validated.
 
 The important engineering chain is:
 
@@ -141,6 +150,14 @@ where $L$ is the distance between the wheel contact points. Gazebo's DiffDrive s
 | /imu | sensor_msgs/msg/Imu | Gazebo → ROS2 | Angular velocity used by the V3 heading estimator |
 | /state_estimate | nav_msgs/msg/Odometry | Estimator → navigation | Wheel position with fused heading; optional V3 input |
 | /scan | sensor_msgs/msg/LaserScan | Gazebo → ROS2 | LiDAR range measurements |
+| /localized_estimate | nav_msgs/msg/Odometry | Localizer → navigation | Opt-in gated LiDAR-map position correction |
+| /localization_correction_m | std_msgs/msg/Float64 | Localizer → diagnostics | Applied correction magnitude in metres |
+| /localization_candidate_correction_m | std_msgs/msg/Float64 | Localizer → diagnostics | Raw candidate displacement before smoothing/gating |
+| /localization_match_score_m | std_msgs/msg/Float64 | Localizer → diagnostics | Raw mean LiDAR-map range residual score |
+| /localization_heading_correction_rad | std_msgs/msg/Float64 | Localizer → diagnostics | Applied heading correction in radians |
+| /localization_score_improvement_m | std_msgs/msg/Float64 | Localizer → diagnostics | Input-pose score minus candidate score |
+| /localization_match_valid | std_msgs/msg/Bool | Localizer → diagnostics | Whether the latest match passed the safety gates |
+| /localization_match_status | std_msgs/msg/String | Localizer → diagnostics | Reason for accepting or rejecting the latest match |
 | /cmd_vel_raw | geometry_msgs/msg/Twist | Controller → safety layer | Unchecked motion request |
 | /cmd_vel | geometry_msgs/msg/Twist | Safety layer → Gazebo | Command allowed to reach robot |
 
@@ -181,9 +198,11 @@ $$
 \theta^{\mathrm{fused}}_k = \mathrm{wrap}\left(\theta^{\mathrm{fused}}_k + \lambda\,\mathrm{wrap}\left(\theta^{\mathrm{wheel}}_k - \theta^{\mathrm{fused}}_k\right)\right)
 $$
 
-The default $\lambda = 0.02$ is a transparent tuning parameter. It gives the
-gyro short-term responsiveness while allowing wheel yaw to limit long-term
-drift; it is not a covariance-derived EKF gain. The first estimator publishes
+The launch parameter `wheel_weight` is the transparent tuning parameter
+$\lambda$, with default $\lambda = 0.02$. It gives the gyro short-term
+responsiveness while allowing wheel yaw to limit long-term drift; it is not a
+covariance-derived EKF gain. The value is recorded in estimator metrics for
+reproducible fusion-weight sweeps. The first estimator publishes
 wheel-odometry `x` and `y` together with the fused heading on `/state_estimate`.
 
 The V2-compatible launch leaves all navigation nodes on `/odom`:
@@ -204,9 +223,190 @@ ros2 launch robotics_sim sim.launch.py \
 ```
 
 Switching navigation to `/state_estimate` remains an exploratory experiment,
-not a validated full-pose navigation mode. This first milestone is
-intentionally not an EKF. Bias, white noise, wheel slip, covariance handling,
-and RMSE reporting are the next controlled steps.
+not a validated full-pose navigation mode. V3.3 adds an explicit adaptive
+heading mode with state
+
+$$
+\mathbf{x}_k =
+\begin{bmatrix}
+\theta_k \\
+b_{g,k}
+\end{bmatrix}
+$$
+
+The correction is represented as a persistent planar transform
+$T_{\mathrm{map}\leftarrow\mathrm{odom}}$. If the current odometry pose is
+$p_{\mathrm{odom}}$, the published localized pose is
+
+$$
+p_{\mathrm{map}} = T_{\mathrm{map}\leftarrow\mathrm{odom}}
+\oplus p_{\mathrm{odom}}.
+$$
+
+and a covariance-derived wheel-yaw gain:
+
+$$
+K_k = \frac{P_k^-}{P_k^- + R_{\mathrm{wheel}}}
+$$
+
+The adaptive mode estimates gyro bias and publishes its gain and innovation
+as diagnostics. It is still only a heading filter: wheel-odometry `x` and `y`
+remain uncorrected, so it is not yet a validated full-pose localization
+system.
+
+### 4.2 Innovation-adaptive wheel-yaw noise
+
+The fixed wheel-yaw variance can be replaced by a bounded innovation-based
+estimate. Let $\nu_k$ be the wrapped difference between wheel yaw and the
+predicted heading. Its exponentially smoothed squared magnitude is
+
+$$
+\widehat{S}_k = (1-\beta)\widehat{S}_{k-1} + \beta\nu_k^2
+$$
+
+The wheel measurement variance is then updated as
+
+$$
+R_{\mathrm{wheel},k}
+=
+\mathrm{clip}\left(
+\widehat{S}_k-P_k^-,\ R_{\min},\ R_{\max}
+\right)
+$$
+
+Here $P_k^-$ is the predicted heading variance, $R_{\min}$ and $R_{\max}$
+are the configured variance bounds, and $\beta$ is
+`wheel_noise_adaptation_rate`. The launch parameters expose standard-deviation
+bounds, so $R_{\min}=\sigma_{\min}^2$ and $R_{\max}=\sigma_{\max}^2$. The
+corresponding gain remains
+
+$$
+K_k = \frac{P_k^-}{P_k^-+R_{\mathrm{wheel},k}}
+$$
+
+This makes the measurement model less trusting when recent wheel-yaw
+innovations are large. It is a bounded quality heuristic, not a direct
+measurement of sensor noise or a full adaptive EKF; persistent wheel and gyro
+biases cannot be completely separated with only these two heading sources.
+The current standard-deviation estimate is published on
+`/wheel_yaw_noise_std_estimate` and included in estimator diagnostics.
+
+### 4.3 Propagated position mode
+
+The estimator supports a `position_mode:=propagated` option. Instead of copying
+wheel-odometry position increments, it integrates the wheel-odometry forward
+speed using the fused heading. With wheel-slip ratio $s$:
+
+$$
+\Delta s_k = (1-s)v_{x,k}\Delta t_k
+$$
+
+The midpoint heading is
+
+$$
+\theta_{\mathrm{mid},k}
+=
+\mathrm{wrap}\left(\hat{\theta}_{k-1}
++\frac{1}{2}\mathrm{wrap}(\hat{\theta}_k-\hat{\theta}_{k-1})\right)
+$$
+
+and the propagated position is
+
+$$
+\hat{x}_k=\hat{x}_{k-1}+\Delta s_k\cos(\theta_{\mathrm{mid},k}),
+\qquad
+\hat{y}_k=\hat{y}_{k-1}+\Delta s_k\sin(\theta_{\mathrm{mid},k})
+$$
+
+`position_mode:=wheel_pose` remains the backward-compatible diagnostic mode.
+The propagated mode initializes from the first wheel-odometry sample and does
+not consume Gazebo `/odom` for estimation.
+
+### 4.4 Local LiDAR--map position correction
+
+The odometry-only V3 navigation experiment exposes a false-goal-completion
+case: `/state_estimate` can enter the goal tolerance while physical `/odom`
+has not. The optional `lidar_localizer` provides a small absolute-position
+correction using the known static map:
+
+```text
+/state_estimate + /scan + /map → /localized_estimate
+```
+
+For a valid range return $r_i$ at scan angle $\alpha_i$, a candidate pose
+predicts the first occupied-cell range $\hat{r}_i$ by raycasting the static
+map. Its measurement residual is
+
+$$
+e_i(x,y,\theta)=
+\left|r_i-\hat{r}_i(x,y,\theta;\mathcal{M})\right|
+$$
+
+The corresponding candidate endpoint in the map frame is
+
+$$
+\mathbf{p}_{i}^{\mathrm{map}}
+=
+\begin{bmatrix}x\\y\end{bmatrix}
++
+R(\theta)
+\begin{bmatrix}
+r_i\cos(\alpha_i)\\
+r_i\sin(\alpha_i)
+\end{bmatrix}
+$$
+
+The local matcher searches candidate $(x,y,\theta)$ values near the odometry
+pose and minimizes the mean range residual plus small position and heading
+prior penalties. The heading search is local and bounded; it is not a global
+orientation solve. The node is therefore a transparent local scan matcher,
+not a complete SLAM or covariance-aware localization system.
+
+Because a local scan matcher can select a plausible but incorrect nearby pose,
+the ROS node does not forward every raw match to the controller. It accepts a
+candidate only when it has enough valid returns, its mean range score is below
+`localization_max_match_score_m`, and its displacement from the input pose is
+below `localization_max_correction_m`. An accepted candidate estimates a new
+map-to-odom transform, which is interpolated using
+`localization_correction_smoothing`, and must remain consistent for
+`localization_minimum_consecutive_matches` updates. Rejected matches leave the
+previous transform unchanged. The applied correction is published on
+`/localization_correction_m`; the raw score and candidate displacement are
+published on `/localization_match_score_m` and
+`/localization_candidate_correction_m`; and
+`/localization_match_valid` reports whether the latest match passed the gates.
+The candidate must also improve the mean scan residual relative to the input
+pose by at least `localization_minimum_score_improvement_m`. This prevents a
+different nearby local minimum from being accepted merely because its absolute
+score is below the threshold.
+
+When enabled, the node broadcasts the persistent transform as the standard
+`map → odom` TF. `/localized_estimate` is the corresponding pose in the map
+frame for compatibility with the current planner interface.
+
+The corrected topic is opt-in through
+`navigation_pose_topic:=/localized_estimate`; the V2 `/odom` baseline and the
+diagnostic `/state_estimate` path remain unchanged by default. Physical success
+must still be checked with `/odom`, because entering the estimated-pose goal
+tolerance alone does not prove that the robot reached the goal.
+
+The current validation keeps `/localized_estimate` diagnostic-only. In the
+safe `/odom` baseline, the robot still reaches the goal with approximately
+`0.049 m` physical error, while the localizer reports intermittent
+`inconsistent_candidate` and `insufficient_score_improvement` states. Earlier
+closed-loop localizer trials timed out with the robot far from the goal. This
+negative result shows that a local static-map matcher with a drifting heading
+is not yet a reliable localization replacement. A separate estimator-only
+control check reached the estimated-pose tolerance while physical `/odom` was
+still approximately `0.160 m` from the goal at timeout, confirming why both
+success flags must be reported. The next localization step should improve the
+observation model and add covariance/observability diagnostics to the
+persistent transform, rather than simply relaxing the gates.
+
+This checkpoint is intentionally conservative: a run is counted as physically
+successful only when the ground-truth evaluation pose reaches the goal. A
+controller reaching a tolerance using an estimated pose is reported separately
+because it can terminate early while the physical robot is still displaced.
 
 ## 5. Waypoint controller
 
@@ -297,10 +497,12 @@ endpoint directly, uses a lower heading gain and `0.60 rad/s` angular limit,
 and applies a `0.03 rad` heading deadband. This prevents the desired bearing
 from jumping between nearby grid waypoints during the final approach.
 
-The first map uses `odom` as its frame and is aligned with the Gazebo world. This
-avoids introducing TF and localization before the planner itself has been
-validated. Later, the map frame will be separated from `odom` and transformed
-through the standard `map → odom → base_link` chain.
+The static occupancy grid is published in the `map` frame. In the baseline,
+`map` and Gazebo's odometry coordinates are numerically aligned, so the planner
+can still consume the existing `/odom` pose without a localization correction.
+When the optional localizer is enabled, it publishes the standard persistent
+`map → odom → base_link` relationship; rejected scan matches leave that
+transform unchanged.
 
 ## 7. Sensor-aware safety supervisor
 
@@ -973,17 +1175,20 @@ The current ROS2 milestone includes:
 - LiDAR-based safety supervision with a speed-dependent stopping envelope;
 - clearance hysteresis, latched recovery turning, and a tilt guard;
 - a first V3 heading estimator combining `/wheel_odom` and `/imu`;
+- an evaluation-only V3 logger reporting wheel and estimated pose RMSE against `/odom`;
+- configurable, seeded gyro bias and white-noise perturbations for V3 diagnostics;
+- an estimator-summary tool that groups runs by uncertainty configuration;
 - a Gazebo goal marker that remains visible but is excluded from the LiDAR mask.
 
 The next layers are intentionally separated so that each experiment remains
 interpretable:
 
-- V3: heading estimation from IMU and wheel odometry, then pose RMSE and drift;
-- V4: configurable bias, white noise, wheel slip, and covariance handling;
+- V3 next: multi-seed gyro uncertainty sweeps, wheel-slip perturbation, and
+  differential-drive propagation for estimated `x`, `y`, and `theta`;
+- V4: covariance-aware EKF and comparison with the transparent estimator;
 - V5: Monte Carlo validation of localization-to-safety failure propagation;
-- V6: covariance-aware EKF and comparison with the transparent estimator;
-- V7: SLAM and Nav2 integration;
-- V8: camera-based safety events and perception/sensor fusion.
+- V6: SLAM and Nav2 integration;
+- V7: camera-based safety events and perception/sensor fusion.
 
 If the robot stops too early, we can inspect the LiDAR measurement,
 stopping-distance calculation, and command velocity separately instead of

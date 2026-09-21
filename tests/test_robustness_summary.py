@@ -45,6 +45,7 @@ class RobustnessSummaryTests(unittest.TestCase):
         self.assertEqual(summary["goal_reached_count"], 1)
         self.assertEqual(summary["experiment_timeout_count"], 1)
         self.assertEqual(summary["manual_interrupt_count"], 0)
+        self.assertEqual(summary["external_interrupt_count"], 0)
         self.assertEqual(summary["unknown_termination_count"], 0)
         self.assertEqual(summary["success_rate"], 0.5)
         self.assertEqual(summary["mean_time_to_goal_s"], 70.0)

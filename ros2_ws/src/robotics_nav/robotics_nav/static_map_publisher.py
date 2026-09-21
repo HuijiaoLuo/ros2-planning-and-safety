@@ -20,6 +20,7 @@ class StaticMapPublisher(Node):
         self.declare_parameter("resolution", 0.1)
         self.declare_parameter("origin_x", -1.0)
         self.declare_parameter("origin_y", -3.0)
+        self.declare_parameter("frame_id", "map")
         self.declare_parameter("publish_rate_hz", 1.0)
 
         self.width = int(self.get_parameter("width").value)
@@ -27,6 +28,7 @@ class StaticMapPublisher(Node):
         self.resolution = float(self.get_parameter("resolution").value)
         self.origin_x = float(self.get_parameter("origin_x").value)
         self.origin_y = float(self.get_parameter("origin_y").value)
+        self.frame_id = str(self.get_parameter("frame_id").value)
         publish_rate = float(self.get_parameter("publish_rate_hz").value)
 
         map_qos = QoSProfile(
@@ -42,7 +44,7 @@ class StaticMapPublisher(Node):
 
     def build_map(self) -> OccupancyGrid:
         message = OccupancyGrid()
-        message.header.frame_id = "odom"
+        message.header.frame_id = self.frame_id
         message.info.resolution = self.resolution
         message.info.width = self.width
         message.info.height = self.height

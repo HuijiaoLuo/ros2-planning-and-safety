@@ -52,6 +52,7 @@ class EvaluationLogger(Node):
         self.declare_parameter("safety_margin", 0.15)
         self.declare_parameter("planning_radius_m", 0.35)
         self.declare_parameter("experiment_timeout_s", 0.0)
+        self.declare_parameter("navigation_pose_topic", "/odom")
 
         self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
         self.front_angle = math.radians(
@@ -87,11 +88,15 @@ class EvaluationLogger(Node):
         self.configured_experiment_timeout = float(
             self.get_parameter("experiment_timeout_s").value
         )
+        self.navigation_pose_topic = str(
+            self.get_parameter("navigation_pose_topic").value
+        )
         safety_override_topic = str(
             self.get_parameter("safety_override_topic").value
         )
 
         self.latest_odom: Optional[Odometry] = None
+        self.latest_navigation_pose: Optional[Odometry] = None
         self.latest_plan: Optional[NavPath] = None
         self.initial_plan: Optional[NavPath] = None
         self.latest_map: Optional[OccupancyGrid] = None
@@ -112,6 +117,7 @@ class EvaluationLogger(Node):
         self.last_sample_time: Optional[float] = None
         self.started_at: Optional[float] = None
         self.goal_reached_at: Optional[float] = None
+        self.navigation_goal_reached_at: Optional[float] = None
         self.termination_reason: Optional[str] = None
 
         self.travelled_distance = 0.0
@@ -135,6 +141,13 @@ class EvaluationLogger(Node):
             self.odom_callback,
             qos_profile_sensor_data,
         )
+        if self.navigation_pose_topic != "/odom":
+            self.create_subscription(
+                Odometry,
+                self.navigation_pose_topic,
+                self.navigation_pose_callback,
+                qos_profile_sensor_data,
+            )
         self.create_subscription(NavPath, "/plan", self.plan_callback, path_qos)
         self.create_subscription(OccupancyGrid, "/map", self.map_callback, path_qos)
         self.create_subscription(
@@ -184,6 +197,9 @@ class EvaluationLogger(Node):
 
     def odom_callback(self, message: Odometry) -> None:
         self.latest_odom = message
+
+    def navigation_pose_callback(self, message: Odometry) -> None:
+        self.latest_navigation_pose = message
 
     def plan_callback(self, message: NavPath) -> None:
         self.latest_plan = message
@@ -308,15 +324,44 @@ class EvaluationLogger(Node):
                 self.safety_override_time += delta_time
             self.override_active = self.latest_override_state
 
+        navigation_pose = (
+            self.latest_odom
+            if self.navigation_pose_topic == "/odom"
+            else self.latest_navigation_pose
+        )
+        ground_truth_goal_distance: Optional[float] = None
+        navigation_goal_distance: Optional[float] = None
         if self.goal_x is not None and self.goal_y is not None:
-            goal_distance = distance_2d(
+            ground_truth_goal_distance = distance_2d(
                 current_x,
                 current_y,
                 self.goal_x,
                 self.goal_y,
             )
-            if goal_distance <= self.goal_tolerance and self.goal_reached_at is None:
+            if (
+                ground_truth_goal_distance <= self.goal_tolerance
+                and self.goal_reached_at is None
+            ):
                 self.goal_reached_at = now
+            if navigation_pose is not None:
+                navigation_position = navigation_pose.pose.pose.position
+                navigation_goal_distance = distance_2d(
+                    navigation_position.x,
+                    navigation_position.y,
+                    self.goal_x,
+                    self.goal_y,
+                )
+                if (
+                    navigation_goal_distance <= self.goal_tolerance
+                    and self.navigation_goal_reached_at is None
+                ):
+                    self.navigation_goal_reached_at = now
+
+        navigation_position = (
+            None
+            if navigation_pose is None
+            else navigation_pose.pose.pose.position
+        )
 
         raw_linear_x = (
             None if self.latest_raw_command is None else self.latest_raw_command.linear.x
@@ -329,6 +374,14 @@ class EvaluationLogger(Node):
                 "time_s": now - self.started_at,
                 "x_m": current_x,
                 "y_m": current_y,
+                "navigation_x_m": (
+                    None if navigation_position is None else navigation_position.x
+                ),
+                "navigation_y_m": (
+                    None if navigation_position is None else navigation_position.y
+                ),
+                "ground_truth_goal_error_m": ground_truth_goal_distance,
+                "navigation_goal_error_m": navigation_goal_distance,
                 "yaw_rad": self.yaw_from_quaternion(
                     self.latest_odom.pose.pose.orientation
                 ),
@@ -364,21 +417,70 @@ class EvaluationLogger(Node):
                 self.goal_y,
             )
 
+        navigation_final_error: Optional[float] = None
+        navigation_pose = (
+            self.latest_odom
+            if self.navigation_pose_topic == "/odom"
+            else self.latest_navigation_pose
+        )
+        if (
+            navigation_pose is not None
+            and self.goal_x is not None
+            and self.goal_y is not None
+        ):
+            position = navigation_pose.pose.pose.position
+            navigation_final_error = distance_2d(
+                position.x,
+                position.y,
+                self.goal_x,
+                self.goal_y,
+            )
+
         elapsed = None if self.started_at is None else now - self.started_at
         time_to_goal = (
             None
             if self.started_at is None or self.goal_reached_at is None
             else self.goal_reached_at - self.started_at
         )
+        navigation_time_to_goal = (
+            None
+            if self.started_at is None
+            or self.navigation_goal_reached_at is None
+            else self.navigation_goal_reached_at - self.started_at
+        )
+        navigation_goal_error_gap = (
+            None
+            if final_error is None or navigation_final_error is None
+            else abs(navigation_final_error - final_error)
+        )
+        navigation_reached_before_ground_truth = (
+            self.navigation_goal_reached_at is not None
+            and (
+                self.goal_reached_at is None
+                or self.navigation_goal_reached_at < self.goal_reached_at
+            )
+        )
         return {
             "success": self.goal_reached_at is not None,
+            "ground_truth_goal_reached": self.goal_reached_at is not None,
+            "navigation_pose_topic": self.navigation_pose_topic,
+            "navigation_pose_goal_reached": (
+                self.navigation_goal_reached_at is not None
+            ),
             "start_x": self.start_x,
             "start_y": self.start_y,
             "goal_x": self.goal_x,
             "goal_y": self.goal_y,
             "final_error_m": final_error,
+            "ground_truth_final_error_m": final_error,
+            "navigation_pose_final_error_m": navigation_final_error,
+            "navigation_pose_goal_error_gap_m": navigation_goal_error_gap,
+            "navigation_pose_reached_before_ground_truth": (
+                navigation_reached_before_ground_truth
+            ),
             "elapsed_time_s": elapsed,
             "time_to_goal_s": time_to_goal,
+            "navigation_pose_time_to_goal_s": navigation_time_to_goal,
             "initial_planned_path_length_m": self.initial_planned_path_length,
             "latest_planned_path_length_m": self.latest_planned_path_length,
             "plan_update_count": self.plan_update_count,
@@ -405,7 +507,7 @@ class EvaluationLogger(Node):
             "configured_safety_margin_m": self.configured_safety_margin,
             "configured_planning_radius_m": self.configured_planning_radius,
             "configured_experiment_timeout_s": self.configured_experiment_timeout,
-            "termination_reason": self.termination_reason or "manual_interrupt",
+            "termination_reason": self.termination_reason or "external_interrupt",
             "minimum_clearance_m": (
                 None
                 if math.isinf(self.minimum_clearance)
@@ -449,6 +551,10 @@ class EvaluationLogger(Node):
                 "time_s",
                 "x_m",
                 "y_m",
+                "navigation_x_m",
+                "navigation_y_m",
+                "ground_truth_goal_error_m",
+                "navigation_goal_error_m",
                 "yaw_rad",
                 "goal_x_m",
                 "goal_y_m",
@@ -515,7 +621,9 @@ def main(args=None) -> None:
         rclpy.spin(node)
     except KeyboardInterrupt:
         if node.termination_reason is None:
-            node.termination_reason = "manual_interrupt"
+            # SIGINT may come from the shell's timeout utility rather than a
+            # person pressing Ctrl+C. Keep the source-neutral label explicit.
+            node.termination_reason = "external_interrupt"
     except Exception:
         # rclpy raises ExternalShutdownException when another node requests a
         # coordinated shutdown. Re-raise genuine live-node failures, but let
