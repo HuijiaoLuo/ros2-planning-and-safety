@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish a local LiDAR-to-map position correction for V3.6."""
+"""Publish an experimental local LiDAR-to-map position correction."""
 
 from __future__ import annotations
 

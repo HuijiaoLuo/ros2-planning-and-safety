@@ -11,11 +11,15 @@ The project is deliberately incremental. At each stage, one new uncertainty is a
 
 V2 is the validated baseline: navigation uses `/odom`, while the safety layer
 uses physical LiDAR measurements and all evaluation results are recorded with
-their launch-time configuration. V3 evaluates wheel/IMU state estimation
-against `/odom` without feeding `/odom` into the estimator. V4 currently has
-two explicit layers: V4.0 is the gated LiDAR-to-map diagnostic, while V4.1 is
-the new covariance-aware pose EKF. Neither corrected pose is yet a validated
-control input.
+their launch-time configuration. The state-estimation workstream evaluates
+wheel/IMU estimates against `/odom` without feeding `/odom` into the estimator.
+The map-localization and covariance-aware pose-filter experiments are separate
+diagnostic layers; neither corrected pose is yet a validated control input.
+
+Focused notes are split by topic: [`docs/STATE_ESTIMATION.md`](docs/STATE_ESTIMATION.md)
+for transparent wheel/IMU fusion, [`docs/POSE_EKF.md`](docs/POSE_EKF.md) for
+covariance-aware pose estimation, and [`docs/LOCALIZATION.md`](docs/LOCALIZATION.md)
+for the gated LiDAR-to-map matcher.
 
 ## 1. Problem definition
 
@@ -33,10 +37,11 @@ This is not yet a complete autonomous navigation stack. In the current stage:
 - Nav2 is not used yet.
 
 The V2 baseline deliberately uses Gazebo's ideal `/odom` pose so that planner
-and safety experiments can be interpreted independently. V3 adds a separate
-`/state_estimate` topic from wheel odometry and IMU heading fusion. The current
-V3 milestone runs that estimator in parallel and evaluates it against `/odom`;
-navigation remains on `/odom` until the estimated `x,y` state is validated.
+and safety experiments can be interpreted independently. The estimator adds a
+separate `/state_estimate` topic from wheel odometry and IMU heading fusion.
+The diagnostic runs that estimator in parallel and evaluates it against
+`/odom`; navigation remains on `/odom` until the estimated `x,y` state is
+validated.
 
 The important engineering chain is:
 
@@ -70,7 +75,7 @@ C++ planning core
 ROS2 control layer
     ├── path_follower
     ├── waypoint_controller baseline
-    ├── heading_estimator (V3)
+    ├── heading_estimator (state estimation)
     └── safety_supervisor
 
 ROS2 planning layer
@@ -124,7 +129,7 @@ where $L$ is the distance between the wheel contact points. Gazebo's DiffDrive s
 ## 4. ROS2 computation graph
 
 ~~~
-                 /odom (V2) or /state_estimate (V3)
+                 /odom (validated baseline) or /state_estimate (experimental)
                            │
                            ▼
                  ┌────────────────────┐
@@ -148,8 +153,8 @@ where $L$ is the distance between the wheel contact points. Gazebo's DiffDrive s
 |---|---|---|---|
 | /odom | nav_msgs/msg/Odometry | Gazebo → ROS2 | Ground-truth pose for the ideal MVP |
 | /wheel_odom | nav_msgs/msg/Odometry | Gazebo → ROS2 | DiffDrive wheel odometry for slip comparison |
-| /imu | sensor_msgs/msg/Imu | Gazebo → ROS2 | Angular velocity used by the V3 heading estimator |
-| /state_estimate | nav_msgs/msg/Odometry | Estimator → navigation | Wheel position with fused heading; optional V3 input |
+| /imu | sensor_msgs/msg/Imu | Gazebo → ROS2 | Angular velocity used by the heading estimator |
+| /state_estimate | nav_msgs/msg/Odometry | Estimator → navigation | Wheel/estimated position with fused heading; optional input |
 | /scan | sensor_msgs/msg/LaserScan | Gazebo → ROS2 | LiDAR range measurements |
 | /localized_estimate | nav_msgs/msg/Odometry | Localizer → navigation | Opt-in gated LiDAR-map position correction |
 | /localization_correction_m | std_msgs/msg/Float64 | Localizer → diagnostics | Applied correction magnitude in metres |
@@ -167,9 +172,9 @@ The distinction between /cmd_vel_raw and /cmd_vel is important. It makes the saf
 The simulation deliberately exposes two pose sources. The ideal-navigation
 MVP uses `/odom`, generated from Gazebo's true model pose, so planning and
 control are not invalidated by wheel slip before the basic loop is verified.
-The DiffDrive plugin publishes `/wheel_odom` separately. V3 adds an IMU and a
-transparent heading estimator; `/state_estimate` can then replace `/odom` for
-navigation while `/odom` remains available only to the evaluation logger.
+The DiffDrive plugin publishes `/wheel_odom` separately. The estimator adds an
+IMU and transparent heading fusion; `/state_estimate` can then replace `/odom`
+for navigation while `/odom` remains available only to the evaluation logger.
 
 The simulated actuator also has explicit linear and angular velocity and
 acceleration limits. These keep the ideal model physically stable when the
@@ -181,7 +186,7 @@ matters because Gazebo sensor bridges commonly publish with best-effort,
 volatile QoS; a default reliable subscription may be incompatible and receive
 no callbacks even when the topic appears in the graph.
 
-## 4.1 First V3 estimator: wheel odometry plus IMU heading
+## 4.1 State estimation: wheel odometry plus IMU heading
 
 Gazebo publishes an IMU on `/imu`. The estimator consumes only the IMU angular
 velocity, not its orientation field. This prevents the simulated perfect
@@ -213,8 +218,8 @@ ros2 launch robotics_sim sim.launch.py \
   navigation_pose_topic:=/odom
 ```
 
-The validated V3 diagnostic keeps navigation on `/odom` while the estimator
-runs in parallel:
+The validated diagnostic keeps navigation on `/odom` while the estimator runs
+in parallel:
 
 ```bash
 ros2 launch robotics_sim sim.launch.py \
@@ -224,8 +229,8 @@ ros2 launch robotics_sim sim.launch.py \
 ```
 
 Switching navigation to `/state_estimate` remains an exploratory experiment,
-not a validated full-pose navigation mode. V3.3 adds an explicit adaptive
-heading mode with state
+not a validated full-pose navigation mode. The adaptive heading mode keeps the
+state
 
 $$
 \mathbf{x}_k =
@@ -255,7 +260,7 @@ as diagnostics. It is still only a heading filter: wheel-odometry `x` and `y`
 remain uncorrected, so it is not yet a validated full-pose localization
 system.
 
-### 4.2 Innovation-adaptive wheel-yaw noise
+### Innovation-adaptive wheel-yaw noise
 
 The fixed wheel-yaw variance can be replaced by a bounded innovation-based
 estimate. The wrapped innovation is
@@ -294,7 +299,7 @@ biases cannot be completely separated with only these two heading sources.
 The current standard-deviation estimate is published on
 `/wheel_yaw_noise_std_estimate` and included in estimator diagnostics.
 
-### 4.3 Propagated position mode
+### Propagated position mode
 
 The estimator supports a `position_mode:=propagated` option. Instead of copying
 wheel-odometry position increments, it integrates the wheel-odometry forward
@@ -324,7 +329,7 @@ $$
 The propagated mode initializes from the first wheel-odometry sample and does
 not consume Gazebo `/odom` for estimation.
 
-### 4.4 Local LiDAR--map position correction
+### Local LiDAR--map position correction
 
 The odometry-only V3 navigation experiment exposes a false-goal-completion
 case: `/state_estimate` can enter the goal tolerance while physical `/odom`
@@ -417,10 +422,10 @@ successful only when the ground-truth evaluation pose reaches the goal. A
 controller reaching a tolerance using an estimated pose is reported separately
 because it can terminate early while the physical robot is still displaced.
 
-### 4.5 V4.1 covariance-aware pose EKF
+### Covariance-aware pose EKF
 
-The V3 adaptive heading filter estimates only heading and gyro bias. V4.1
-extends the state to planar pose and gyro bias:
+The adaptive heading filter estimates only heading and gyro bias. The
+covariance-aware pose EKF extends the state to planar pose and gyro bias:
 
 $$
 \mathbf{x}_{k} = [x_{k},y_{k},\theta_{k},b_{g,k}]^{\mathsf{T}}
@@ -439,7 +444,7 @@ P_{k+1}^{-} = F_{k}P_{k}F_{k}^{\mathsf{T}} + Q_{k}
 $$
 
 The process covariance $Q_k$ includes configured gyro-rate noise, wheel-speed
-noise, and gyro-bias random walk. Wheel yaw is the first V4 measurement:
+noise, and gyro-bias random walk. Wheel yaw is the first measurement:
 
 $$
 \nu_{k} = \mathrm{wrap}(\theta_{k}^{\mathrm{wheel}} - \theta_{k}^{-})
@@ -470,7 +475,7 @@ replacement for a complete sensor fault model.
 `/heading_fusion_nis` and `/heading_measurement_accepted`. The estimator uses
 `/wheel_odom` and IMU angular velocity only; `/odom` remains evaluation-only.
 
-The first V4 smoke test keeps navigation on `/odom`:
+The first EKF smoke test keeps navigation on `/odom`:
 
 ```bash
 ros2 launch robotics_sim sim.launch.py \
@@ -488,6 +493,11 @@ ros2 launch robotics_sim sim.launch.py \
   estimation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v4_ekf_smoke_metrics.csv
 ```
 
+The first recorded smoke row completed the `/odom` baseline with
+`mean NIS≈0.079`, `max NIS≈1.275`, and zero rejected wheel-yaw updates. The
+EKF reported approximately `0.0735 m` position RMSE and `0.071 rad` heading
+RMSE, while mean x/y covariance remained about `0.250 m²`. This validates the
+diagnostic plumbing, not covariance calibration or navigation replacement.
 The next comparisons should vary one uncertainty at a time: zero slip versus
 `wheel_slip_ratio:=0.10`, then seeded gyro bias/noise. Closed-loop navigation
 with `/state_estimate` remains blocked until the physical `/odom` result and
@@ -1263,22 +1273,21 @@ The current ROS2 milestone includes:
 - ordered path following for the differential-drive robot;
 - LiDAR-based safety supervision with a speed-dependent stopping envelope;
 - clearance hysteresis, latched recovery turning, and a tilt guard;
-- a first V3 heading estimator combining `/wheel_odom` and `/imu`;
-- an evaluation-only V3 logger reporting wheel and estimated pose RMSE against `/odom`;
-- configurable, seeded gyro bias and white-noise perturbations for V3 diagnostics;
+- a wheel/IMU heading estimator combining `/wheel_odom` and `/imu`;
+- an evaluation-only logger reporting wheel and estimated pose RMSE against `/odom`;
+- configurable, seeded gyro bias and white-noise perturbations for estimator diagnostics;
 - an estimator-summary tool that groups runs by uncertainty configuration;
-- a V4.1 four-state pose EKF with covariance propagation, NIS gating, and
+- a four-state pose EKF with covariance propagation, NIS gating, and
   measurement-acceptance diagnostics;
 - a Gazebo goal marker that remains visible but is excluded from the LiDAR mask.
 
 The next layers are intentionally separated so that each experiment remains
 interpretable:
 
-- V3: transparent wheel/IMU uncertainty experiments and diagnostic local
+- transparent wheel/IMU uncertainty experiments and diagnostic local
   LiDAR-map matching;
-- V4.0: gated LiDAR-map correction remains diagnostic-only;
-- V4.1: covariance-aware pose EKF and comparison with the transparent
-  estimator;
+- gated LiDAR-map correction remains diagnostic-only;
+- covariance-aware pose EKF and comparison with the transparent estimator;
 - V5: Monte Carlo validation of localization-to-safety failure propagation;
 - V6: SLAM and Nav2 integration;
 - V7: camera-based safety events and perception/sensor fusion.

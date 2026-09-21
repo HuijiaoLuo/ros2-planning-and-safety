@@ -1,4 +1,4 @@
-"""Small dependency-free LiDAR-to-map position matcher for V3.6."""
+"""Small dependency-free LiDAR-to-map position matcher."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def interpolate_pose(first: Pose2D, second: Pose2D, fraction: float) -> Pose2D:
 class LidarMapMatcher:
     """Estimate a local x/y correction by matching scan endpoints to a map.
 
-    The matcher deliberately keeps the V3.6 model transparent: heading is
+    The matcher deliberately keeps the local model transparent: heading is
     supplied by the wheel/IMU estimator, while only x/y are searched locally.
     It is a local scan-to-map correction, not a full SLAM system.
     """

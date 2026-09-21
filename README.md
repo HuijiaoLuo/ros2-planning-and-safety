@@ -35,8 +35,8 @@ clearance threshold and the speed-dependent stopping envelope. See
 ## Current status
 
 The current V2 milestone is frozen as a reproducible planning and safety
-baseline. The repository also contains an explicitly separated V3 estimation
-and V4 localization workstream; these are not silently presented as validated
+baseline. The repository also contains explicitly separated state-estimation
+and map-localization workstreams; these are not silently presented as validated
 navigation replacements.
 
 The current implementation includes:
@@ -51,14 +51,14 @@ The current implementation includes:
 - Python unit tests, C++ tests, and GitHub Actions CI.
 - an offline planner-scaling benchmark for map-size, density, and heuristic sweeps;
 - a read-only ROS2 evaluation logger for closed-loop metrics;
-- a V3 heading-estimation diagnostic using `/wheel_odom` and `/imu` while
+- a heading-estimation diagnostic using `/wheel_odom` and `/imu` while
   navigation remains on the validated `/odom` baseline;
-- an evaluation-only V3 estimator logger reporting wheel and fused-pose RMSE;
+- an evaluation-only estimator logger reporting wheel and fused-pose RMSE;
 - seeded gyro bias/noise, wheel-slip, adaptive fusion, and propagated-position
   experiments with configuration values recorded in CSV output;
 - a gated LiDAR-to-static-map localizer with persistent `map → odom` state and
   diagnostic match-status topics;
-- a V4.1 covariance-aware pose EKF with x/y/yaw covariance, NIS gating, and
+- a covariance-aware pose EKF with x/y/yaw covariance, NIS gating, and
   wheel-measurement acceptance diagnostics;
 
 The robot has been tested in simulation from the start position to the goal at
@@ -113,13 +113,14 @@ Gazebo differential-drive robot
 The green goal marker is visible in Gazebo but excluded from the LiDAR
 visibility mask, so it is not treated as a physical obstacle.
 
-The V2 baseline uses `/odom` for navigation. V3 additionally provides:
+The V2 baseline uses `/odom` for navigation. The state-estimation workstream
+additionally provides:
 
 ```text
 /wheel_odom + /imu → heading_estimator → /state_estimate
 ```
 
-An optional V3.6 localizer adds a known-map position correction:
+An optional map-localization experiment adds a known-map position correction:
 
 ```text
 /state_estimate + /scan + /map
@@ -135,7 +136,9 @@ position drifts from `/odom`. The LiDAR localizer is an opt-in experiment and
 is not yet a validated SLAM replacement. It now keeps a stateful `map→odom`
 correction and can broadcast it on TF, but remains diagnostic-only until
 covariance-aware validation is complete. See
-[`docs/V3_STATE_ESTIMATION.md`](docs/V3_STATE_ESTIMATION.md).
+[`docs/STATE_ESTIMATION.md`](docs/STATE_ESTIMATION.md),
+[`docs/POSE_EKF.md`](docs/POSE_EKF.md), and
+[`docs/LOCALIZATION.md`](docs/LOCALIZATION.md).
 
 The current heading diagnostic reached the goal with a final error of
 approximately `0.049 m`, zero safety overrides, and no collision while the
@@ -144,7 +147,7 @@ published in the `map` frame; in the baseline, `map` and Gazebo odometry are
 numerically aligned, while the optional localizer provides the standard
 `map → odom → base_link` transform.
 
-### V3/V4 validation status
+### State-estimation and localization status
 
 The estimator compares `/wheel_odom`, pure gyro integration, and
 `/state_estimate` against `/odom` without feeding `/odom` into the estimator.
@@ -153,11 +156,10 @@ the physical `/odom` pose was still approximately `0.160 m` from the goal when
 the experiment timeout ended. This is a documented false-goal-completion case,
 not a successful physical navigation result.
 
-The V4.0 LiDAR localizer remains diagnostic-only. No-slip and denser-scan trials
-produced inconsistent candidate corrections. V4.1 now adds a separate
-covariance-aware pose EKF, but it is also diagnostic-only until its physical
-error, covariance growth, NIS values, and measurement rejection behavior are
-validated under controlled uncertainty.
+The LiDAR localizer remains diagnostic-only. No-slip and denser-scan trials
+produced inconsistent candidate corrections. The covariance-aware pose EKF is
+also diagnostic-only until its physical error, covariance growth, NIS values,
+and measurement rejection behavior are validated under controlled uncertainty.
 
 ## Quick start
 
@@ -176,7 +178,7 @@ python tools/planner_scaling_benchmark.py \
   --seed-count 2
 
 python tools/summarize_estimation.py \
-  --glob "results/v3_*_metrics.csv" \
+  --glob "results/*_metrics.csv" \
   --output results/estimation_summary.csv
 ```
 
@@ -257,12 +259,17 @@ METHOD_TECH.md        Detailed methods, equations, diagnostics, and roadmap
 See [METHOD_TECH.md](METHOD_TECH.md) for:
 
 - differential-drive and controller equations;
-- the first V3 state-estimation milestone;
-- planner and safety-supervisor logic;
+- the overall system equations, planner, safety supervisor, and validation protocol;
 - ROS2 topic flow and launch sequence;
 - parameter meanings and validation protocol;
 - current limitations and the roadmap toward uncertainty, HPC, SLAM, Nav2,
   and vision.
+
+For focused estimation documentation, see:
+
+- [State Estimation](docs/STATE_ESTIMATION.md) for transparent wheel/IMU fusion;
+- [Pose EKF](docs/POSE_EKF.md) for covariance propagation and NIS diagnostics;
+- [Map-based Localization](docs/LOCALIZATION.md) for the gated LiDAR matcher.
 
 ## License
 
