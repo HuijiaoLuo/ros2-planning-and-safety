@@ -51,6 +51,33 @@ The robot has been tested in simulation from the start position to the goal at
 approximately `(2.0, 0.0)`, with a final position error within the configured
 `0.05 m` tolerance.
 
+### Robustness snapshot
+
+The evaluation suite measures goal completion, time-to-goal, physical LiDAR
+clearance, safety-layer intervention, and collision status. The summary below
+shows the main planning-radius boundary on the current map:
+
+| Configuration | Success | Mean time-to-goal | Mean measured clearance | Safety override ratio |
+| --- | :---: | ---: | ---: | ---: |
+| Baseline: radius `0.35 m`, no noise | 1/1 | 65.04 s | 0.521 m | 0.000 |
+| Noise `0.03 m`, radius `0.40 m` | 1/3 | 462.93 s* | 0.525 m | 0.683 |
+| Noise `0.03 m`, radius `0.41 m` | 3/3 | 71.00 s | 0.632 m | 0.000 |
+| Noise `0.05 m`, radius `0.40 m` | 0/3 | -- | 0.573 m | 0.764 |
+| Noise `0.05 m`, radius `0.41 m` | 3/3 | 70.49 s | 0.632 m | 0.002 |
+| Delay `0.30 s` + noise `0.05 m`, radius `0.41 m` | 3/3 | 69.38 s | 0.631 m | 0.008 |
+
+\* The `0.40 m` configuration is a marginal boundary case: its single
+successful run took much longer and required sustained safety intervention.
+The smallest robust configuration tested on this map is therefore
+`planning_radius=0.41 m`. All listed runs were collision-free.
+
+![Robustness summary](docs/assets/robustness_summary.png)
+
+The evaluation logger records `termination_reason` (`goal_reached`,
+`experiment_timeout`, or `manual_interrupt`) and supports an explicit
+`experiment_timeout_s` launch parameter. This makes failed or stalled runs
+bounded and reproducible instead of relying on an open-ended simulation.
+
 ## System architecture
 
 ```text
@@ -134,6 +161,15 @@ To save one closed-loop evaluation row when the simulation is stopped:
 ```bash
 ros2 launch robotics_sim sim.launch.py \
   evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/closed_loop_metrics.csv
+```
+
+For bounded robustness experiments, let the evaluation logger close the full
+ROS2/Gazebo launch automatically:
+
+```bash
+ros2 launch robotics_sim sim.launch.py \
+  experiment_timeout_s:=120.0 \
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/robustness_case.csv
 ```
 
 ## Repository layout
