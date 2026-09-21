@@ -294,6 +294,10 @@ class LidarLocalizer(Node):
                 pose.orientation.w,
             ),
         )
+        # The input estimate is expressed in ``odom``.  Apply the last accepted
+        # map->odom transform before comparing it with the static map.  Keeping
+        # this transform persistent is what makes rejected scan matches safe:
+        # one bad scan cannot erase an earlier accepted correction.
         map_pose = transform_pose(self.map_odom_transform, odom_pose)
         map_x, map_y, map_yaw = map_pose
         x, y, matched_yaw, score, point_count = self.matcher.match_pose(
@@ -325,6 +329,10 @@ class LidarLocalizer(Node):
         candidate_dy = y - map_y
         candidate_dyaw = wrap_angle(matched_yaw - map_yaw)
         candidate_correction = math.hypot(candidate_dx, candidate_dy)
+        # These are safety gates around the optimizer, not extra tuning terms.
+        # A low residual alone is insufficient: the candidate must have enough
+        # returns, stay close to the prior, have a bounded yaw change, and
+        # improve the prior-pose score.
         quality_valid = (
             math.isfinite(score)
             and point_count >= self.matcher.minimum_points
@@ -378,6 +386,9 @@ class LidarLocalizer(Node):
         else:
             match_status = "accepted"
         if match_valid:
+            # Convert the accepted map-frame candidate back into a map->odom
+            # transform.  Interpolation avoids a discontinuous jump in the pose
+            # that a future controller could consume.
             candidate_map_pose: Pose2D = (x, y, matched_yaw)
             desired_map_odom = map_odom_from_poses(
                 candidate_map_pose,
@@ -404,6 +415,9 @@ class LidarLocalizer(Node):
             correction_y = 0.0
             correction_yaw = 0.0
 
+        # Publish the pose produced by the previous persistent transform even
+        # when this scan is rejected.  A rejected measurement must not snap the
+        # output back to raw odometry or inject a one-frame correction.
         estimate_pose = transform_pose(self.map_odom_transform, odom_pose)
         estimate = copy.deepcopy(self.latest_pose)
         estimate.header.frame_id = self.output_frame_id or self.map_frame_id

@@ -237,11 +237,14 @@ For a valid LiDAR return, the corresponding map endpoint is
 $$
 \mathbf{p}_{i}^{\mathrm{map}}
 =
-\begin{bmatrix}x\\y\end{bmatrix}
+\begin{bmatrix}
+x \\
+y
+\end{bmatrix}
 +
 R(\theta)
 \begin{bmatrix}
-r_i\cos(\alpha_i)\\
+r_i\cos(\alpha_i) \\
 r_i\sin(\alpha_i)
 \end{bmatrix}
 $$
@@ -251,18 +254,27 @@ mean range residual, with a small prior penalty for moving far from the
 odometry estimate. The corrected pose is
 
 $$
-\hat{x},\hat{y}
+\begin{bmatrix}
+\hat{x} \\
+\hat{y}
+\end{bmatrix}
 =
-\underset{x,y\ \mathrm{near}\ \hat{x}_{\mathrm{odom}},\hat{y}_{\mathrm{odom}}}{\arg\min}
-\left[
+\underset{(x,y)\ \mathrm{near}\ (\hat{x}_{\mathrm{odom}},\hat{y}_{\mathrm{odom}})}{\operatorname{arg\,min}}
+\left\{
 \frac{1}{N}\sum_{i=1}^{N}e_i(x,y,\theta)
 +
 \lambda\left\Vert
-\begin{bmatrix}x\\y\end{bmatrix}
+\begin{bmatrix}
+x \\
+y
+\end{bmatrix}
 -
-\begin{bmatrix}\hat{x}_{\mathrm{odom}}\\\hat{y}_{\mathrm{odom}}\end{bmatrix}
+\begin{bmatrix}
+\hat{x}_{\mathrm{odom}} \\
+\hat{y}_{\mathrm{odom}}
+\end{bmatrix}
 \right\Vert^2
-\right]
+\right\}
 $$
 
 Only `x` and `y` are corrected; heading remains the fused wheel/IMU heading.

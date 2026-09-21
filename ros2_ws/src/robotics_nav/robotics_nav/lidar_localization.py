@@ -18,7 +18,13 @@ def wrap_angle(angle: float) -> float:
 
 
 def compose_pose(first: Pose2D, second: Pose2D) -> Pose2D:
-    """Compose two planar poses represented as ``(x, y, yaw)``."""
+    """Compose two planar poses represented as ``(x, y, yaw)``.
+
+    ``first`` is the transform from an outer frame to an intermediate frame,
+    while ``second`` is the pose in that intermediate frame.  The result is
+    the same pose expressed in the outer frame.  This is the two-dimensional
+    equivalent of multiplying homogeneous SE(2) transforms.
+    """
     first_x, first_y, first_yaw = first
     second_x, second_y, second_yaw = second
     cosine = math.cos(first_yaw)
@@ -48,7 +54,13 @@ def transform_pose(transform: Pose2D, pose: Pose2D) -> Pose2D:
 
 
 def map_odom_from_poses(map_pose: Pose2D, odom_pose: Pose2D) -> Pose2D:
-    """Estimate ``map→odom`` from corresponding map and odom poses."""
+    """Estimate ``map→odom`` from corresponding map and odom poses.
+
+    If the same robot pose is known in both frames, then
+    ``T_map_odom = T_map_pose * inverse(T_odom_pose)``.  The localizer stores
+    this transform instead of overwriting odometry, so later rejected scans do
+    not erase the last accepted map correction.
+    """
     return compose_pose(map_pose, inverse_pose(odom_pose))
 
 
@@ -118,7 +130,14 @@ class LidarMapMatcher:
         data: Sequence[int],
         occupied_threshold: int = 50,
     ) -> None:
-        """Cache occupied-cell centres from a ROS OccupancyGrid message."""
+        """Cache occupied cells from a ROS ``OccupancyGrid`` message.
+
+        The matcher raycasts against cell indices, not directly against Gazebo
+        geometry.  The map origin and resolution therefore define the
+        conversion between continuous metres and discrete grid cells.  The
+        outer boundary may be ignored because it is a planning limit rather
+        than a physical LiDAR landmark in this experiment.
+        """
         self.width = int(width)
         self.height = int(height)
         self.resolution = float(resolution)
@@ -153,6 +172,9 @@ class LidarMapMatcher:
         range_min: float,
         range_max: float,
     ) -> list[tuple[float, float | None]]:
+        # Keep invalid/no-return rays as ``None``.  They still carry a negative
+        # observation: a candidate should not predict an obstacle where the
+        # sensor reported no valid return.
         measurements: list[tuple[float, float | None]] = []
         for index in range(0, len(ranges), self.scan_stride):
             distance = float(ranges[index])
@@ -171,7 +193,13 @@ class LidarMapMatcher:
         *,
         range_max: float,
     ) -> float | None:
-        """Return the first occupied-cell intersection along one map ray."""
+        """Return the first occupied cell encountered along one map ray.
+
+        This transparent grid raycast approximates a continuous LiDAR beam by
+        stepping through the map at a fraction of one cell.  The returned
+        distance is measured from the candidate LiDAR origin, so it can be
+        compared directly with a ``LaserScan`` range.
+        """
         step = max(0.01, 0.25 * self.resolution)
         distance = 0.0
         while distance <= range_max:
@@ -198,6 +226,8 @@ class LidarMapMatcher:
         *,
         range_max: float,
     ) -> float:
+        # Cap each ray residual.  A missed return should influence the score,
+        # but one bad ray must not dominate all other geometric evidence.
         total = 0.0
         count = 0
         for scan_angle, measured_range in measurements:
@@ -269,7 +299,14 @@ class LidarMapMatcher:
         range_max: float,
         yaw_search_radius_rad: float | None = None,
     ) -> tuple[float, float, float, float, int]:
-        """Return corrected x/y/yaw, score, and usable scan-point count."""
+        """Return corrected ``x/y/yaw``, score, and valid-point count.
+
+        The input pose is the current estimate in the map frame.  The search
+        explores a bounded local window around it, so this is a local
+        correction mechanism rather than global localization.  The prior
+        penalty prefers a nearby solution when several scan matches are
+        similarly plausible.
+        """
         measurements = self._scan_measurements(
             ranges,
             angle_min=angle_min,
@@ -300,6 +337,9 @@ class LidarMapMatcher:
         best_yaw = float(prior_yaw)
         best_score = float("inf")
         best_residual = float("inf")
+        # Search heading locally first, then translation.  The fused wheel/IMU
+        # yaw is the strongest short-term orientation cue, so this is not a
+        # global orientation solve.
         for yaw_step in range(-yaw_steps, yaw_steps + 1):
             candidate_yaw = float(prior_yaw) + yaw_step * self.yaw_search_step_rad
             for x_step in range(-steps, steps + 1):
@@ -318,6 +358,9 @@ class LidarMapMatcher:
                     dx = candidate_x - float(prior_x)
                     dy = candidate_y - float(prior_y)
                     dyaw = wrap_angle(candidate_yaw - float(prior_yaw))
+                    # ``residual`` measures scan/map agreement.  The prior
+                    # terms regularize weakly observable scenes and keep the
+                    # chosen candidate near odometry.
                     score = (
                         residual
                         + self.prior_weight * (dx * dx + dy * dy)
