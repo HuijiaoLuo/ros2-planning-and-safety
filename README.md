@@ -57,18 +57,20 @@ The evaluation suite measures goal completion, time-to-goal, physical LiDAR
 clearance, safety-layer intervention, and collision status. The summary below
 shows the main planning-radius boundary on the current map:
 
-| Configuration | Success | Mean time-to-goal | Mean measured clearance | Safety override ratio |
+| Configuration | Success | Mean time-to-goal (successful runs) | Mean measured clearance | Safety override ratio |
 | --- | :---: | ---: | ---: | ---: |
 | Baseline: radius `0.35 m`, no noise | 1/1 | 65.04 s | 0.521 m | 0.000 |
-| Noise `0.03 m`, radius `0.40 m` | 1/3 | 462.93 s* | 0.525 m | 0.683 |
+| Noise `0.03 m`, radius `0.40 m` | 1/3 | 462.93 s (n=1) | 0.525 m | 0.683 |
 | Noise `0.03 m`, radius `0.41 m` | 3/3 | 71.00 s | 0.632 m | 0.000 |
 | Noise `0.05 m`, radius `0.40 m` | 0/3 | -- | 0.573 m | 0.764 |
 | Noise `0.05 m`, radius `0.41 m` | 3/3 | 70.49 s | 0.632 m | 0.002 |
 | Delay `0.30 s` + noise `0.05 m`, radius `0.41 m` | 3/3 | 69.38 s | 0.631 m | 0.008 |
 
-\* The `0.40 m` configuration is a marginal boundary case: its single
+The `0.40 m` configuration is a marginal boundary case: its single
 successful run took much longer and required sustained safety intervention.
-The smallest robust configuration tested on this map is therefore
+The time-to-goal value above is therefore calculated from one successful
+seed, not averaged over all three trials. The smallest robust configuration
+tested on this map is therefore
 `planning_radius=0.41 m`. All listed runs were collision-free.
 
 ![Robustness summary](docs/assets/robustness_summary.png)
