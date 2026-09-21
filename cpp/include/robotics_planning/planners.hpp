@@ -13,6 +13,8 @@ enum class HeuristicKind {
 };
 
 struct SearchResult {
+    // ``expanded`` is retained for visualizations and search-effort
+    // comparisons; ``path`` contains only the final start-to-goal chain.
     std::string algorithm;
     std::vector<Cell> path;
     std::vector<Cell> expanded;
@@ -39,11 +41,13 @@ std::vector<Cell> reconstruct_path(
 
 class BFSPlanner {
 public:
+    // FIFO wavefront search. With unit edge costs this minimizes step count.
     SearchResult plan(const GridMap& grid, Cell start, Cell goal) const;
 };
 
 class DijkstraPlanner {
 public:
+    // Uniform-cost search. Unlike BFS, this honors per-cell entry costs.
     SearchResult plan(const GridMap& grid, Cell start, Cell goal) const;
 };
 
@@ -53,6 +57,7 @@ public:
         HeuristicKind heuristic_kind = HeuristicKind::Manhattan
     ) : heuristic_kind_(heuristic_kind) {}
 
+    // Priority is h(n) only; this is a fast but non-optimal baseline.
     SearchResult plan(const GridMap& grid, Cell start, Cell goal) const;
 
 private:
@@ -65,6 +70,7 @@ public:
         HeuristicKind heuristic_kind = HeuristicKind::Manhattan
     ) : heuristic_kind_(heuristic_kind) {}
 
+    // Priority is f(n) = g(n) + h(n); admissible h preserves optimality.
     SearchResult plan(const GridMap& grid, Cell start, Cell goal) const;
 
 private:
@@ -73,6 +79,7 @@ private:
 
 class DFSBacktrackingPlanner {
 public:
+    // Recursive-style depth-first exploration with explicit parent links.
     SearchResult plan(const GridMap& grid, Cell start, Cell goal) const;
 };
 

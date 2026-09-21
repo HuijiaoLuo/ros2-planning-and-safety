@@ -7,6 +7,7 @@
 
 namespace robotics_planning {
 
+// Cells use a flat row-major index: index = y * grid_width + x.
 using Cell = int;
 
 struct ParsedAsciiMap;
@@ -29,12 +30,13 @@ public:
     bool is_free(Cell cell) const noexcept;
     double cost_to_enter(Cell cell) const;
 
-    // Flat cell index: cell = y * width + x.
+    // Flat row-major cell index: cell = y * width + x.
     int cell(int x, int y) const noexcept { return y * width_ + x; }
     int x_of(Cell cell) const noexcept { return cell % width_; }
     int y_of(Cell cell) const noexcept { return cell / width_; }
 
-    // Right, down, left, up. Invalid or occupied neighbors are returned as -1.
+    // Right, down, left, up. Invalid or occupied neighbors are returned as -1
+    // so planners can keep a fixed-size neighbor loop without exceptions.
     std::array<Cell, 4> neighbors4(Cell cell) const noexcept;
 
     const std::vector<std::uint8_t>& occupancy() const noexcept { return occupied_; }

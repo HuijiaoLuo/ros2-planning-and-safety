@@ -9,6 +9,8 @@
 using namespace robotics_planning;
 
 int main() {
+    // One fixed map is shared by every planner. The printed '+' cells show
+    // search effort and '*' cells show the returned route.
     const auto parsed = parse_ascii_map({
         "S...#.........",
         "....#.........",

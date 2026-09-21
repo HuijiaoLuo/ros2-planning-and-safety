@@ -12,6 +12,9 @@ namespace robotics_planning {
 namespace {
 
 struct QueueEntry {
+    // ``priority`` is h for Greedy and g+h for A*. ``g_cost`` is stored
+    // separately so stale entries can be rejected after a better route is
+    // discovered for the same cell.
     double priority;
     std::size_t sequence;
     Cell cell;
@@ -37,6 +40,8 @@ void validate_endpoints(const GridMap& grid, Cell start, Cell goal) {
 }
 
 double path_cost(const GridMap& grid, const std::vector<Cell>& path) {
+    // The cost of a path is the sum of costs for entered cells; the start
+    // cell is not charged because the robot is already there.
     double total = 0.0;
     for (std::size_t index = 1; index < path.size(); ++index) {
         total += grid.cost_to_enter(path[index]);
@@ -52,6 +57,8 @@ SearchResult make_result(
     Cell goal,
     std::vector<Cell> expanded
 ) {
+    // All planners share path reconstruction and cost reporting so that
+    // differences in the benchmark come from search order, not accounting.
     SearchResult result;
     result.algorithm = algorithm;
     result.expanded = std::move(expanded);
@@ -84,6 +91,8 @@ std::vector<Cell> reconstruct_path(
     Cell start,
     Cell goal
 ) {
+    // Search stores one predecessor per cell. Walk from the goal backward,
+    // then reverse the vector to recover the command order start -> goal.
     if (start == goal) {
         return {start};
     }
@@ -111,6 +120,8 @@ std::vector<Cell> reconstruct_path(
 
 SearchResult BFSPlanner::plan(const GridMap& grid, Cell start, Cell goal) const {
     validate_endpoints(grid, start, goal);
+    // FIFO order creates a breadth-wise wavefront. Because every move has
+    // unit cost, the first discovered route to a cell has minimum steps.
     std::queue<Cell> frontier;
     std::vector<std::uint8_t> discovered(static_cast<std::size_t>(grid.cell_count()), 0U);
     std::vector<Cell> parent(static_cast<std::size_t>(grid.cell_count()), -1);
@@ -128,6 +139,8 @@ SearchResult BFSPlanner::plan(const GridMap& grid, Cell start, Cell goal) const 
         }
 
         for (const Cell neighbor : grid.neighbors4(current)) {
+            // Mark at enqueue time, not dequeue time, to avoid duplicate
+            // queue entries and to preserve the first shortest predecessor.
             if (neighbor >= 0 && discovered[static_cast<std::size_t>(neighbor)] == 0U) {
                 discovered[static_cast<std::size_t>(neighbor)] = 1U;
                 parent[static_cast<std::size_t>(neighbor)] = current;
@@ -145,6 +158,9 @@ SearchResult DijkstraPlanner::plan(const GridMap& grid, Cell start, Cell goal) c
     std::vector<double> distance(static_cast<std::size_t>(grid.cell_count()), infinity);
     std::vector<Cell> parent(static_cast<std::size_t>(grid.cell_count()), -1);
     std::vector<Cell> expanded;
+    // The smallest known path cost is expanded first. The priority queue may
+    // contain multiple entries for one cell because C++ priority_queue has no
+    // decrease-key operation.
     std::priority_queue<QueueEntry, std::vector<QueueEntry>, MinQueue> frontier;
     std::size_t sequence = 0;
 
@@ -154,6 +170,8 @@ SearchResult DijkstraPlanner::plan(const GridMap& grid, Cell start, Cell goal) c
     while (!frontier.empty()) {
         const QueueEntry entry = frontier.top();
         frontier.pop();
+        // A later relaxation may have lowered this cell's distance. The old
+        // entry is stale and must not produce more expansions.
         if (entry.g_cost > distance[static_cast<std::size_t>(entry.cell)]) {
             continue;
         }
@@ -169,6 +187,7 @@ SearchResult DijkstraPlanner::plan(const GridMap& grid, Cell start, Cell goal) c
             }
             const double new_cost = entry.g_cost + grid.cost_to_enter(neighbor);
             auto& known_cost = distance[static_cast<std::size_t>(neighbor)];
+            // Relax the edge only when this route improves the best known g.
             if (new_cost < known_cost) {
                 known_cost = new_cost;
                 parent[static_cast<std::size_t>(neighbor)] = entry.cell;
@@ -189,6 +208,8 @@ SearchResult GreedyBestFirstPlanner::plan(
     std::vector<std::uint8_t> discovered(static_cast<std::size_t>(grid.cell_count()), 0U);
     std::vector<Cell> parent(static_cast<std::size_t>(grid.cell_count()), -1);
     std::vector<Cell> expanded;
+    // Greedy priority is h(n), the estimated remaining distance only. It can
+    // reach the goal quickly but may ignore an expensive or long detour.
     std::priority_queue<QueueEntry, std::vector<QueueEntry>, MinQueue> frontier;
     std::size_t sequence = 0;
 
@@ -207,6 +228,8 @@ SearchResult GreedyBestFirstPlanner::plan(
             if (neighbor >= 0 && discovered[static_cast<std::size_t>(neighbor)] == 0U) {
                 discovered[static_cast<std::size_t>(neighbor)] = 1U;
                 parent[static_cast<std::size_t>(neighbor)] = entry.cell;
+                // Greedy marks cells once and does not reopen them through a
+                // cheaper route; optimality is intentionally not guaranteed.
                 frontier.push({
                     heuristic(grid, neighbor, goal, heuristic_kind_),
                     sequence++,
@@ -226,6 +249,9 @@ SearchResult AStarPlanner::plan(const GridMap& grid, Cell start, Cell goal) cons
     std::vector<double> distance(static_cast<std::size_t>(grid.cell_count()), infinity);
     std::vector<Cell> parent(static_cast<std::size_t>(grid.cell_count()), -1);
     std::vector<Cell> expanded;
+    // A* ranks entries by f(n) = g(n) + h(n). The heuristic only changes the
+    // order in which candidates are explored; distance[] remains the source
+    // of truth for route replacement.
     std::priority_queue<QueueEntry, std::vector<QueueEntry>, MinQueue> frontier;
     std::size_t sequence = 0;
 
@@ -240,6 +266,8 @@ SearchResult AStarPlanner::plan(const GridMap& grid, Cell start, Cell goal) cons
     while (!frontier.empty()) {
         const QueueEntry entry = frontier.top();
         frontier.pop();
+        // Ignore an obsolete copy whose stored g is larger than the current
+        // best distance for this cell.
         if (entry.g_cost > distance[static_cast<std::size_t>(entry.cell)]) {
             continue;
         }
@@ -255,6 +283,8 @@ SearchResult AStarPlanner::plan(const GridMap& grid, Cell start, Cell goal) cons
             }
             const double new_cost = entry.g_cost + grid.cost_to_enter(neighbor);
             auto& known_cost = distance[static_cast<std::size_t>(neighbor)];
+            // This is the relaxation step. With an admissible heuristic,
+            // stopping when the goal is popped preserves optimal path cost.
             if (new_cost < known_cost) {
                 known_cost = new_cost;
                 parent[static_cast<std::size_t>(neighbor)] = entry.cell;
@@ -281,6 +311,9 @@ SearchResult DFSBacktrackingPlanner::plan(
     std::vector<Cell> parent(static_cast<std::size_t>(grid.cell_count()), -1);
     std::vector<Cell> expanded;
 
+    // The lambda expresses recursive DFS. ``parent`` is assigned immediately
+    // before descending, so reconstruct_path can recover the active branch if
+    // the goal is found.
     std::function<bool(Cell)> visit = [&](Cell current) {
         visited[static_cast<std::size_t>(current)] = 1U;
         expanded.push_back(current);
@@ -290,6 +323,8 @@ SearchResult DFSBacktrackingPlanner::plan(
 
         for (const Cell neighbor : grid.neighbors4(current)) {
             if (neighbor >= 0 && visited[static_cast<std::size_t>(neighbor)] == 0U) {
+                // Marking before recursion prevents cycles in undirected grid
+                // edges and makes each cell expand at most once.
                 parent[static_cast<std::size_t>(neighbor)] = current;
                 if (visit(neighbor)) {
                     return true;

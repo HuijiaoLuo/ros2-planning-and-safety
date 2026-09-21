@@ -31,6 +31,8 @@ void test_all_planners_find_a_path() {
 }
 
 void test_unit_cost_optimality() {
+    // BFS, Dijkstra, and A* should agree when every free cell costs 1.0;
+    // their search order may differ, but the optimal cost must not.
     const auto parsed = parse_ascii_map({
         "S...#..",
         "....#..",
@@ -48,6 +50,8 @@ void test_unit_cost_optimality() {
 }
 
 void test_weighted_dijkstra() {
+    // The direct route crosses a deliberately expensive cell, so Dijkstra
+    // should choose the longer geometric route with lower accumulated cost.
     std::vector<double> costs(6, 1.0);
     costs[1] = 10.0;
     const GridMap grid(3, 2, std::vector<std::uint8_t>{}, costs);
@@ -61,6 +65,8 @@ void test_weighted_dijkstra() {
 }
 
 void test_unreachable_goal() {
+    // A blocked component must return found=false rather than an invented
+    // partial path or a zero cost.
     const auto parsed = parse_ascii_map({
         "S#G",
         "###",

@@ -23,6 +23,8 @@ BenchmarkRecord benchmark_planner(
     SearchResult result;
     double total_ms = 0.0;
     for (int repetition = 0; repetition < repetitions; ++repetition) {
+        // Every repetition receives the same immutable map and endpoints. The
+        // final result is kept for visualization; only the timing is averaged.
         const auto begin = std::chrono::steady_clock::now();
         result = planner(grid, start, goal);
         const auto end = std::chrono::steady_clock::now();
@@ -35,6 +37,9 @@ BenchmarkRecord benchmark_planner(
     record.path_cost = result.cost;
     record.path_length = result.path_length();
     record.expanded_nodes = result.expanded.size();
+    // Expanded nodes measure search effort, while runtime_ms measures wall
+    // time. Keeping both prevents a fast but inefficient planner from looking
+    // equivalent to an algorithm that searched less of the map.
     record.runtime_ms = total_ms / static_cast<double>(repetitions);
     record.result = std::move(result);
     return record;

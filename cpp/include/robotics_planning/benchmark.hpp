@@ -8,9 +8,13 @@
 
 namespace robotics_planning {
 
+// A planner function is a common callable interface, which lets the
+// benchmark time each algorithm on exactly the same map and endpoints.
 using PlannerFunction = std::function<SearchResult(const GridMap&, Cell, Cell)>;
 
 struct BenchmarkRecord {
+    // ``result`` keeps the final run for visualization; scalar fields are the
+    // compact values printed in comparison tables.
     std::string algorithm;
     bool found = false;
     double path_cost = -1.0;

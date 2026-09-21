@@ -34,13 +34,14 @@ wheel yaw is unchanged in this first version.
 For an IMU sample at time step `k`:
 
 $$
-\theta^{\mathrm{imu}}_{k+1} = \mathrm{wrap}\left(\theta^{\mathrm{imu}}_{k} + \omega_{z,k}\Delta t\right)
+\theta^{\mathrm{imu}}_{k+1} = \mathrm{wrap}(\theta^{\mathrm{imu}}_{k} + \omega_{z,k}\Delta t)
 $$
 
 The wheel-odometry yaw is used as a slow correction:
 
 $$
-\theta^{\mathrm{fused}}_k = \mathrm{wrap}\left(\theta^{\mathrm{fused}}_k + \lambda\,\mathrm{wrap}\left(\theta^{\mathrm{wheel}}_k - \theta^{\mathrm{fused}}_k\right)\right)
+\theta^{\mathrm{fused}}_{k} = \mathrm{wrap}(\theta^{\mathrm{fused}}_{k} +
+\lambda\,\mathrm{wrap}(\theta^{\mathrm{wheel}}_{k} - \theta^{\mathrm{fused}}_{k}))
 $$
 
 The launch parameter `wheel_weight` is the complementary-fusion value
@@ -142,28 +143,17 @@ optional robust extension can update the wheel-yaw variance from the recent
 innovation sequence:
 
 $$
-\widehat{S}_{k}
-=
-(1-\beta)\widehat{S}_{k-1}
-+\beta\,\nu_{k}^{2}
+\widehat{S}_{k} = (1-\beta)\widehat{S}_{k-1} + \beta\nu_{k}^{2}
 $$
 
 $$
-R_{\mathrm{wheel},k}
-=
-\operatorname{clip}\!\left(
-\widehat{S}_{k}-P_{k}^{-},\ R_{\min},\ R_{\max}
-\right)
+R_{\mathrm{wheel},k} = \mathrm{clip}(\widehat{S}_{k} - P_{k}^{-}, R_{\min}, R_{\max})
 $$
 
 The innovation used by the update is
 
 $$
-\nu_{k}
-=
-\operatorname{wrap}\!\left(
-\theta_{k}^{\mathrm{wheel}}-\theta_{k}^{-}
-\right)
+\nu_{k} = \mathrm{wrap}(\theta_{k}^{\mathrm{wheel}} - \theta_{k}^{-})
 $$
 
 Here $\nu_{k}$ is measured in radians, while $\widehat{S}_{k}$,
@@ -181,9 +171,7 @@ correction gain, while a quiet innovation sequence allows the gain to recover.
 The corresponding scalar correction gain is
 
 $$
-K_{k}
-=
-\frac{P_{k}^{-}}{P_{k}^{-}+R_{\mathrm{wheel},k}}
+K_{k} = \frac{P_{k}^{-}}{P_{k}^{-} + R_{\mathrm{wheel},k}}
 $$
 
 This is an innovation-based measurement-quality heuristic, not a direct
@@ -216,19 +204,17 @@ increment is the midpoint between consecutive fused headings:
 $$
 \theta_{\mathrm{mid},k}
 =
-\mathrm{wrap}\left(
-\hat{\theta}_{k-1}
-+
-\frac{1}{2}\mathrm{wrap}(\hat{\theta}_k-\hat{\theta}_{k-1})
-\right)
+\mathrm{wrap}(\hat{\theta}_{k-1} +
+\frac{1}{2}\mathrm{wrap}(\hat{\theta}_{k} - \hat{\theta}_{k-1}))
 $$
 
 and the position update is
 
 $$
-\hat{x}_k = \hat{x}_{k-1} + \Delta s_k\cos(\theta_{\mathrm{mid},k}),
-\qquad
-\hat{y}_k = \hat{y}_{k-1} + \Delta s_k\sin(\theta_{\mathrm{mid},k})
+\begin{aligned}
+\hat{x}_{k} &= \hat{x}_{k-1} + \Delta s_{k}\cos(\theta_{\mathrm{mid},k}), \\
+\hat{y}_{k} &= \hat{y}_{k-1} + \Delta s_{k}\sin(\theta_{\mathrm{mid},k})
+\end{aligned}
 $$
 
 The first wheel-odometry sample initializes the local estimate. Gazebo's ideal
@@ -255,24 +241,16 @@ For each candidate pose, the matcher raycasts the static map and predicts the
 first occupied-cell range $\hat{r}_i$. The measured range residual is
 
 $$
-e_i(x,y,\theta) =
-\left|r_i-\hat{r}_i(x,y,\theta;\mathcal{M})\right|
+e_i(x,y,\theta) = |r_i - \hat{r}_i(x,y,\theta;\mathcal{M})|
 $$
 
 For a valid LiDAR return, the corresponding map endpoint is
 
 $$
-\mathbf{p}_{i}^{\mathrm{map}}
-=
-\begin{bmatrix}
-x \\
-y
-\end{bmatrix}
-+
-R(\theta)
-\begin{bmatrix}
-r_i\cos(\alpha_i) \\
-r_i\sin(\alpha_i)
+\mathbf{p}_{i}^{\mathrm{map}} =
+\begin{bmatrix} x \\ y \end{bmatrix} +
+R(\theta)\begin{bmatrix}
+r_i\cos(\alpha_i) \\ r_i\sin(\alpha_i)
 \end{bmatrix}
 $$
 
@@ -281,27 +259,16 @@ mean range residual, with a small prior penalty for moving far from the
 odometry estimate. The corrected pose is
 
 $$
-\begin{bmatrix}
-\hat{x} \\
-\hat{y}
-\end{bmatrix}
+\begin{bmatrix}\hat{x} \\ \hat{y}\end{bmatrix}
 =
-\underset{(x,y)\ \mathrm{near}\ (\hat{x}_{\mathrm{odom}},\hat{y}_{\mathrm{odom}})}{\operatorname{arg\,min}}
-\left\{
-\frac{1}{N}\sum_{i=1}^{N}e_i(x,y,\theta)
-+
-\lambda\left\Vert
-\begin{bmatrix}
-x \\
-y
-\end{bmatrix}
--
-\begin{bmatrix}
-\hat{x}_{\mathrm{odom}} \\
-\hat{y}_{\mathrm{odom}}
-\end{bmatrix}
-\right\Vert^2
-\right\}
+\underset{(x,y)\text{ near }(\hat{x}_{\mathrm{odom}},\hat{y}_{\mathrm{odom}})}{\text{arg min}}
+[
+\frac{1}{N}\sum_{i=1}^{N} e_i(x,y,\theta) +
+\lambda\lVert
+\begin{bmatrix}x \\ y\end{bmatrix} -
+\begin{bmatrix}\hat{x}_{\mathrm{odom}} \\ \hat{y}_{\mathrm{odom}}\end{bmatrix}
+\rVert_2^2
+]
 $$
 
 Only `x` and `y` are corrected; heading remains the fused wheel/IMU heading.

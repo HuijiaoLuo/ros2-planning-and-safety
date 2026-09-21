@@ -14,6 +14,9 @@ GridMap::GridMap(
     std::vector<std::uint8_t> occupied,
     std::vector<double> cell_costs
 ) : width_(width), height_(height) {
+    // The planner stores the grid in flat row-major arrays so a cell lookup
+    // is constant-time and the C++ and Python implementations share the same
+    // coordinate convention.
     if (width_ <= 0 || height_ <= 0) {
         throw std::invalid_argument("Grid dimensions must be positive");
     }
@@ -67,6 +70,8 @@ std::array<Cell, 4> GridMap::neighbors4(Cell current) const noexcept {
 
     const int x = x_of(current);
     const int y = y_of(current);
+    // Keep this order deterministic: right, down, left, up. Deterministic
+    // neighbors make equal-cost planner tie behavior reproducible.
     const std::array<std::pair<int, int>, 4> directions = {
         std::pair<int, int>{1, 0},
         std::pair<int, int>{0, 1},
@@ -81,6 +86,8 @@ std::array<Cell, 4> GridMap::neighbors4(Cell current) const noexcept {
         const Cell candidate = in_bounds(neighbor_x, neighbor_y)
             ? cell(neighbor_x, neighbor_y)
             : -1;
+        // ``-1`` is a sentinel for a boundary/occupied neighbor; callers can
+        // skip it without allocating a temporary vector.
         result[index] = candidate >= 0 && is_free(candidate) ? candidate : -1;
     }
     return result;
@@ -92,6 +99,8 @@ std::string GridMap::render(
     Cell start,
     Cell goal
 ) const {
+    // Rendering overlays search diagnostics in priority order: obstacles,
+    // explored cells, final path, then start/goal markers for readability.
     std::vector<char> symbols(static_cast<std::size_t>(cell_count()), '.');
     for (Cell cell_index = 0; cell_index < cell_count(); ++cell_index) {
         if (!is_free(cell_index)) {
@@ -129,6 +138,8 @@ std::string GridMap::render(
 }
 
 ParsedAsciiMap parse_ascii_map(const std::vector<std::string>& lines) {
+    // ASCII rows map directly to increasing y. The parser is intentionally
+    // strict so malformed benchmark fixtures fail before planning starts.
     if (lines.empty()) {
         throw std::invalid_argument("Map cannot be empty");
     }

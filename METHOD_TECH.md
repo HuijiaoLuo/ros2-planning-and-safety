@@ -260,30 +260,19 @@ The fixed wheel-yaw variance can be replaced by a bounded innovation-based
 estimate. The wrapped innovation is
 
 $$
-\nu_{k}
-=
-\operatorname{wrap}\!\left(
-\theta_{k}^{\mathrm{wheel}}-\theta_{k}^{-}
-\right)
+\nu_{k} = \mathrm{wrap}(\theta_{k}^{\mathrm{wheel}} - \theta_{k}^{-})
 $$
 
 Its exponentially smoothed squared magnitude is
 
 $$
-\widehat{S}_{k}
-=
-(1-\beta)\widehat{S}_{k-1}
-+\beta\,\nu_{k}^{2}
+\widehat{S}_{k} = (1-\beta)\widehat{S}_{k-1} + \beta\nu_{k}^{2}
 $$
 
 The wheel measurement variance is then updated as
 
 $$
-R_{\mathrm{wheel},k}
-=
-\operatorname{clip}\!\left(
-\widehat{S}_{k}-P_{k}^{-},\ R_{\min},\ R_{\max}
-\right)
+R_{\mathrm{wheel},k} = \mathrm{clip}(\widehat{S}_{k} - P_{k}^{-}, R_{\min}, R_{\max})
 $$
 
 Here $\nu_{k}$ is measured in radians, while $\widehat{S}_{k}$, $P_{k}^{-}$,
@@ -294,7 +283,7 @@ adaptation rate is `wheel_noise_adaptation_rate`. The corresponding gain
 remains
 
 $$
-K_k = \frac{P_k^-}{P_k^-+R_{\mathrm{wheel},k}}
+K_{k} = \frac{P_{k}^{-}}{P_{k}^{-} + R_{\mathrm{wheel},k}}
 $$
 
 This makes the measurement model less trusting when recent wheel-yaw
@@ -318,17 +307,17 @@ The midpoint heading is
 
 $$
 \theta_{\mathrm{mid},k}
-=
-\mathrm{wrap}\left(\hat{\theta}_{k-1}
-+\frac{1}{2}\mathrm{wrap}(\hat{\theta}_k-\hat{\theta}_{k-1})\right)
+= \mathrm{wrap}(\hat{\theta}_{k-1} +
+\frac{1}{2}\mathrm{wrap}(\hat{\theta}_{k} - \hat{\theta}_{k-1}))
 $$
 
 and the propagated position is
 
 $$
-\hat{x}_k=\hat{x}_{k-1}+\Delta s_k\cos(\theta_{\mathrm{mid},k}),
-\qquad
-\hat{y}_k=\hat{y}_{k-1}+\Delta s_k\sin(\theta_{\mathrm{mid},k})
+\begin{aligned}
+\hat{x}_{k} &= \hat{x}_{k-1} + \Delta s_{k}\cos(\theta_{\mathrm{mid},k}), \\
+\hat{y}_{k} &= \hat{y}_{k-1} + \Delta s_{k}\sin(\theta_{\mathrm{mid},k})
+\end{aligned}
 $$
 
 `position_mode:=wheel_pose` remains the backward-compatible diagnostic mode.
@@ -351,21 +340,16 @@ predicts the first occupied-cell range $\hat{r}_i$ by raycasting the static
 map. Its measurement residual is
 
 $$
-e_i(x,y,\theta)=
-\left|r_i-\hat{r}_i(x,y,\theta;\mathcal{M})\right|
+e_i(x,y,\theta) = |r_i - \hat{r}_i(x,y,\theta;\mathcal{M})|
 $$
 
 The corresponding candidate endpoint in the map frame is
 
 $$
-\mathbf{p}_{i}^{\mathrm{map}}
-=
-\begin{bmatrix}x\\y\end{bmatrix}
-+
-R(\theta)
-\begin{bmatrix}
-r_i\cos(\alpha_i)\\
-r_i\sin(\alpha_i)
+\mathbf{p}_{i}^{\mathrm{map}} =
+\begin{bmatrix}x \\ y\end{bmatrix} +
+R(\theta)\begin{bmatrix}
+r_i\cos(\alpha_i) \\ r_i\sin(\alpha_i)
 \end{bmatrix}
 $$
 
