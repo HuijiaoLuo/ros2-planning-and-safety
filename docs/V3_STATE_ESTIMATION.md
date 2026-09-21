@@ -260,8 +260,13 @@ $$
 J(x,y,\theta) = \frac{1}{N}\sum_{i=1}^{N} e_i(x,y,\theta) + \lambda((x-\hat{x}_{\mathrm{odom}})^2 + (y-\hat{y}_{\mathrm{odom}})^2)
 $$
 
-The corrected position $(\hat{x}_{k},\hat{y}_{k})$ is the nearby candidate with
-the smallest score $J$.
+The corrected position is denoted by
+
+$$
+(\hat{x}_{k},\hat{y}_{k})
+$$
+
+and is the nearby candidate with the smallest score $J$.
 
 Only `x` and `y` are corrected; heading remains the fused wheel/IMU heading.
 This is a deliberately small local scan matcher, not a general SLAM system:
