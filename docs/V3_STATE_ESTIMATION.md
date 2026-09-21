@@ -202,19 +202,17 @@ where $s$ is the configured wheel-slip ratio. The heading used for the
 increment is the midpoint between consecutive fused headings:
 
 $$
-\theta_{\mathrm{mid},k}
-=
-\mathrm{wrap}(\hat{\theta}_{k-1} +
-\frac{1}{2}\mathrm{wrap}(\hat{\theta}_{k} - \hat{\theta}_{k-1}))
+\theta_{\mathrm{mid},k} = \mathrm{wrap}(\hat{\theta}_{k-1} + \frac{1}{2}\mathrm{wrap}(\hat{\theta}_{k} - \hat{\theta}_{k-1}))
 $$
 
 and the position update is
 
 $$
-\begin{aligned}
-\hat{x}_{k} &= \hat{x}_{k-1} + \Delta s_{k}\cos(\theta_{\mathrm{mid},k}), \\
-\hat{y}_{k} &= \hat{y}_{k-1} + \Delta s_{k}\sin(\theta_{\mathrm{mid},k})
-\end{aligned}
+\hat{x}_{k} = \hat{x}_{k-1} + \Delta s_{k}\cos(\theta_{\mathrm{mid},k})
+$$
+
+$$
+\hat{y}_{k} = \hat{y}_{k-1} + \Delta s_{k}\sin(\theta_{\mathrm{mid},k})
 $$
 
 The first wheel-odometry sample initializes the local estimate. Gazebo's ideal
@@ -244,32 +242,26 @@ $$
 e_i(x,y,\theta) = |r_i - \hat{r}_i(x,y,\theta;\mathcal{M})|
 $$
 
-For a valid LiDAR return, the corresponding map endpoint is
+For a valid LiDAR return, the corresponding map endpoint is described by its
+two Cartesian components:
 
 $$
-\mathbf{p}_{i}^{\mathrm{map}} =
-\begin{bmatrix} x \\ y \end{bmatrix} +
-R(\theta)\begin{bmatrix}
-r_i\cos(\alpha_i) \\ r_i\sin(\alpha_i)
-\end{bmatrix}
+p_{i,x}^{\mathrm{map}} = x + r_i\cos(\theta + \alpha_i)
 $$
 
-The matcher searches a small grid around the wheel/IMU position and scores the
-mean range residual, with a small prior penalty for moving far from the
-odometry estimate. The corrected pose is
+$$
+p_{i,y}^{\mathrm{map}} = y + r_i\sin(\theta + \alpha_i)
+$$
+
+The matcher searches a small grid around the wheel/IMU position. For a candidate
+position and candidate heading, its score is
 
 $$
-\begin{bmatrix}\hat{x} \\ \hat{y}\end{bmatrix}
-=
-\underset{(x,y)\text{ near }(\hat{x}_{\mathrm{odom}},\hat{y}_{\mathrm{odom}})}{\text{arg min}}
-[
-\frac{1}{N}\sum_{i=1}^{N} e_i(x,y,\theta) +
-\lambda\lVert
-\begin{bmatrix}x \\ y\end{bmatrix} -
-\begin{bmatrix}\hat{x}_{\mathrm{odom}} \\ \hat{y}_{\mathrm{odom}}\end{bmatrix}
-\rVert_2^2
-]
+J(x,y,\theta) = \frac{1}{N}\sum_{i=1}^{N} e_i(x,y,\theta) + \lambda((x-\hat{x}_{\mathrm{odom}})^2 + (y-\hat{y}_{\mathrm{odom}})^2)
 $$
+
+The corrected position $(\hat{x}_{k},\hat{y}_{k})$ is the nearby candidate with
+the smallest score $J$.
 
 Only `x` and `y` are corrected; heading remains the fused wheel/IMU heading.
 This is a deliberately small local scan matcher, not a general SLAM system:

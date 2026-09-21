@@ -306,18 +306,17 @@ $$
 The midpoint heading is
 
 $$
-\theta_{\mathrm{mid},k}
-= \mathrm{wrap}(\hat{\theta}_{k-1} +
-\frac{1}{2}\mathrm{wrap}(\hat{\theta}_{k} - \hat{\theta}_{k-1}))
+\theta_{\mathrm{mid},k} = \mathrm{wrap}(\hat{\theta}_{k-1} + \frac{1}{2}\mathrm{wrap}(\hat{\theta}_{k} - \hat{\theta}_{k-1}))
 $$
 
 and the propagated position is
 
 $$
-\begin{aligned}
-\hat{x}_{k} &= \hat{x}_{k-1} + \Delta s_{k}\cos(\theta_{\mathrm{mid},k}), \\
-\hat{y}_{k} &= \hat{y}_{k-1} + \Delta s_{k}\sin(\theta_{\mathrm{mid},k})
-\end{aligned}
+\hat{x}_{k} = \hat{x}_{k-1} + \Delta s_{k}\cos(\theta_{\mathrm{mid},k})
+$$
+
+$$
+\hat{y}_{k} = \hat{y}_{k-1} + \Delta s_{k}\sin(\theta_{\mathrm{mid},k})
 $$
 
 `position_mode:=wheel_pose` remains the backward-compatible diagnostic mode.
@@ -346,18 +345,24 @@ $$
 The corresponding candidate endpoint in the map frame is
 
 $$
-\mathbf{p}_{i}^{\mathrm{map}} =
-\begin{bmatrix}x \\ y\end{bmatrix} +
-R(\theta)\begin{bmatrix}
-r_i\cos(\alpha_i) \\ r_i\sin(\alpha_i)
-\end{bmatrix}
+p_{i,x}^{\mathrm{map}} = x + r_i\cos(\theta + \alpha_i)
+$$
+
+$$
+p_{i,y}^{\mathrm{map}} = y + r_i\sin(\theta + \alpha_i)
 $$
 
 The local matcher searches candidate $(x,y,\theta)$ values near the odometry
-pose and minimizes the mean range residual plus small position and heading
-prior penalties. The heading search is local and bounded; it is not a global
-orientation solve. The node is therefore a transparent local scan matcher,
-not a complete SLAM or covariance-aware localization system.
+pose. For a candidate position and heading, the position score is
+
+$$
+J(x,y,\theta) = \frac{1}{N}\sum_{i=1}^{N} e_i(x,y,\theta) + \lambda((x-\hat{x}_{\mathrm{odom}})^2 + (y-\hat{y}_{\mathrm{odom}})^2)
+$$
+
+The corrected position is the nearby candidate with the smallest score $J$.
+The heading search is local and bounded; it is not a global orientation solve.
+The node is therefore a transparent local scan matcher, not a complete SLAM
+or covariance-aware localization system.
 
 Because a local scan matcher can select a plausible but incorrect nearby pose,
 the ROS node does not forward every raw match to the controller. It accepts a
@@ -537,16 +542,20 @@ The LiDAR is expressed in the robot's local `base_link` frame. A scan contains
 one range value for each ray angle:
 
 $$
-\alpha_i = \alpha_{\min} + i\,\Delta\alpha
+\alpha_i = \alpha_{\min} + i\Delta\alpha
 $$
 
-The supervisor keeps rays within `±60°` of the robot's forward axis and takes
-the closest valid return:
+The supervisor keeps rays within `±60°` of the robot's forward axis. Define the
+set of ray indices in that sector as
 
 $$
-d_{\mathrm{front}}(t)
-=
-\min_{\{i:\,|\alpha_i|\le 60^\circ\}} r_i(t)
+I_{\mathrm{front}} = \{i \mid |\alpha_i| \le 60^\circ\}
+$$
+
+The front clearance is the closest valid return in that set:
+
+$$
+d_{\mathrm{front}}(t) = \min_{i \in I_{\mathrm{front}}} r_i(t)
 $$
 
 Here, $r_i(t)$ is the distance from the LiDAR origin to the first surface hit by
