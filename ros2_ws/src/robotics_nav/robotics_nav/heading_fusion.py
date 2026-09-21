@@ -7,12 +7,21 @@ import random
 
 
 def wrap_angle(angle: float) -> float:
-    """Wrap an angle to [-pi, pi]."""
+    """Wrap an angle to ``[-pi, pi]`` so angular residuals take the short way.
+
+    Without wrapping, a pair of headings near the ``-pi/pi`` boundary could
+    appear almost one full revolution apart even though they differ by only a
+    few degrees.
+    """
     return math.atan2(math.sin(angle), math.cos(angle))
 
 
 def blend_angles(reference: float, measurement: float, measurement_weight: float) -> float:
-    """Blend two angles along the shortest circular distance."""
+    """Move ``reference`` toward ``measurement`` along the shortest arc.
+
+    The weight is a bounded complementary-fusion gain: zero ignores the
+    measurement and one replaces the reference with it.
+    """
     weight = max(0.0, min(1.0, measurement_weight))
     correction = wrap_angle(measurement - reference)
     return wrap_angle(reference + weight * correction)
@@ -32,6 +41,12 @@ class GyroMeasurementModel:
         self.random = random.Random(int(seed))
 
     def apply(self, angular_velocity_z: float) -> float:
+        """Return the simulated gyro measurement seen by the estimator.
+
+        Bias is a persistent offset in rad/s; Gaussian noise is a fresh
+        zero-mean sample at each call. The seeded generator changes only the
+        realization, allowing repeated runs to compare configurations fairly.
+        """
         # The seeded generator makes every uncertainty sweep reproducible:
         # changing the seed changes the realization, not the noise model.
         noise = (
@@ -107,7 +122,13 @@ class DifferentialDrivePoseModel:
         linear_velocity_x: float,
         fused_yaw: float,
     ) -> tuple[float, float, float]:
-        """Integrate one wheel-odometry body-speed sample."""
+        """Integrate one body-speed sample using midpoint unicycle integration.
+
+        The midpoint heading approximates the heading over the interval rather
+        than using only the old or new endpoint. Invalid or implausibly large
+        time gaps are ignored because they would create an artificial jump in
+        the propagated position.
+        """
         fused_yaw = wrap_angle(fused_yaw)
         if not self._initialized:
             self._initialized = True
@@ -217,7 +238,10 @@ class AdaptiveHeadingFusion:
     The state is ``[heading, gyro_bias]``. IMU yaw rate drives the prediction;
     wheel yaw is a scalar heading measurement. The wheel correction gain is
     computed from the predicted heading variance and wheel measurement
-    variance instead of being a fixed tuning weight.
+    variance instead of being a fixed tuning weight. This is a deliberately
+    small EKF-style covariance calculation, not a general matrix library:
+    only the heading variance, bias variance, and their cross-covariance are
+    needed for this scalar measurement.
     """
 
     def __init__(
@@ -238,6 +262,9 @@ class AdaptiveHeadingFusion:
         max_std = max(min_std, float(wheel_yaw_noise_max_std_rad))
         self.wheel_yaw_noise_min_variance = min_std**2
         self.wheel_yaw_noise_max_variance = max_std**2
+        # All three heading variances use rad^2 units. The bounds keep the
+        # adaptive measurement model from becoming infinitely trusting or
+        # completely unusable after an unusual innovation.
         self.wheel_yaw_variance = max(
             self.wheel_yaw_noise_min_variance,
             min(self.wheel_yaw_noise_max_variance, float(wheel_yaw_noise_std_rad) ** 2),
@@ -277,7 +304,13 @@ class AdaptiveHeadingFusion:
         return math.sqrt(self.wheel_yaw_variance)
 
     def update_wheel(self, wheel_yaw: float) -> float:
-        """Apply a wheel-yaw measurement and return the corrected heading."""
+        """Perform the scalar measurement-update step.
+
+        The innovation is the wrapped difference between wheel yaw and the
+        predicted heading. The heading gain is ``P/(P+R)``; the cross
+        covariance gives the same innovation a smaller coupled correction to
+        the gyro-bias state.
+        """
         wheel_yaw = wrap_angle(wheel_yaw)
         self.wheel_yaw = wheel_yaw
         if self.heading is None:
@@ -309,6 +342,9 @@ class AdaptiveHeadingFusion:
                     + rate * inferred_measurement_variance,
                 ),
             )
+        # The innovation variance is the predicted heading uncertainty plus
+        # the current wheel measurement uncertainty. This scalar denominator
+        # normalizes both the heading and bias gains.
         # Scalar Kalman-style update for the heading component.  The cross
         # covariance couples the heading correction to the gyro-bias estimate.
         innovation_variance = self.heading_variance + self.wheel_yaw_variance
@@ -333,7 +369,13 @@ class AdaptiveHeadingFusion:
         return self.heading
 
     def update_gyro(self, angular_velocity_z: float, stamp: float) -> float | None:
-        """Predict heading and covariance from one IMU yaw-rate sample."""
+        """Perform the IMU prediction step for heading and gyro bias.
+
+        The measured rate minus the current bias advances heading. The
+        covariance propagation then adds rate noise and bias random-walk
+        uncertainty, while preserving the heading/bias cross-covariance that
+        lets later wheel-yaw innovations update the bias estimate.
+        """
         if self.wheel_yaw is None:
             return None
         if self.heading is None:

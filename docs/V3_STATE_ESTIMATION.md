@@ -142,29 +142,56 @@ optional robust extension can update the wheel-yaw variance from the recent
 innovation sequence:
 
 $$
-\widehat{S}_k = (1-\beta)\widehat{S}_{k-1} + \beta\nu_k^2
+\widehat{S}_{k}
+=
+(1-\beta)\widehat{S}_{k-1}
++\beta\,\nu_{k}^{2}
 $$
 
 $$
 R_{\mathrm{wheel},k}
 =
-\mathrm{clip}\left(
-\widehat{S}_k-P_k^-,\ R_{\min},\ R_{\max}
+\operatorname{clip}\!\left(
+\widehat{S}_{k}-P_{k}^{-},\ R_{\min},\ R_{\max}
 \right)
 $$
 
-where $\nu_k$ is the wrapped wheel-yaw innovation, $\widehat{S}_k$ is its
-smoothed squared magnitude, and $\beta$ is
-`wheel_noise_adaptation_rate`. In the implementation,
-$R_{\min}=\sigma_{\min}^2$ and $R_{\max}=\sigma_{\max}^2$, where the launch
-parameters specify the standard deviations. A large recent innovation therefore
-reduces the correction gain by making the wheel measurement appear less
-reliable; a quiet innovation sequence allows the gain to recover.
+The innovation used by the update is
 
-This is an innovation-based measurement-quality heuristic, not a separate
-ground-truth noise measurement and not a full adaptive EKF. A persistent wheel
-bias and a persistent gyro bias are not fully identifiable from wheel yaw plus
-gyro yaw rate alone, so the fixed-$R$ result remains an important comparison.
+$$
+\nu_{k}
+=
+\operatorname{wrap}\!\left(
+\theta_{k}^{\mathrm{wheel}}-\theta_{k}^{-}
+\right)
+$$
+
+Here $\nu_{k}$ is measured in radians, while $\widehat{S}_{k}$,
+$P_{k}^{-}$, and $R_{\mathrm{wheel},k}$ are variances in $\mathrm{rad}^{2}$.
+The parameter $\beta$ is `wheel_noise_adaptation_rate`; it controls how
+quickly recent innovations change the variance estimate.
+
+The implementation uses
+$R_{\min}=\sigma_{\min}^{2}$ and $R_{\max}=\sigma_{\max}^{2}$, where the
+launch parameters specify standard deviations. The clipping operation keeps
+the inferred variance inside these configured physical bounds. A large recent
+innovation therefore increases the apparent wheel uncertainty and reduces the
+correction gain, while a quiet innovation sequence allows the gain to recover.
+
+The corresponding scalar correction gain is
+
+$$
+K_{k}
+=
+\frac{P_{k}^{-}}{P_{k}^{-}+R_{\mathrm{wheel},k}}
+$$
+
+This is an innovation-based measurement-quality heuristic, not a direct
+measurement of sensor noise and not a full adaptive EKF. In particular, a
+persistent bias can produce a persistent innovation, so the adaptive variance
+should be interpreted together with the estimated gyro bias and the fixed-$R$
+reference run.
+
 The current estimate is published on `/wheel_yaw_noise_std_estimate` and is
 recorded by `estimation_logger`.
 

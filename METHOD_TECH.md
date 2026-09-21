@@ -257,11 +257,23 @@ system.
 ### 4.2 Innovation-adaptive wheel-yaw noise
 
 The fixed wheel-yaw variance can be replaced by a bounded innovation-based
-estimate. Let $\nu_k$ be the wrapped difference between wheel yaw and the
-predicted heading. Its exponentially smoothed squared magnitude is
+estimate. The wrapped innovation is
 
 $$
-\widehat{S}_k = (1-\beta)\widehat{S}_{k-1} + \beta\nu_k^2
+\nu_{k}
+=
+\operatorname{wrap}\!\left(
+\theta_{k}^{\mathrm{wheel}}-\theta_{k}^{-}
+\right)
+$$
+
+Its exponentially smoothed squared magnitude is
+
+$$
+\widehat{S}_{k}
+=
+(1-\beta)\widehat{S}_{k-1}
++\beta\,\nu_{k}^{2}
 $$
 
 The wheel measurement variance is then updated as
@@ -269,16 +281,17 @@ The wheel measurement variance is then updated as
 $$
 R_{\mathrm{wheel},k}
 =
-\mathrm{clip}\left(
-\widehat{S}_k-P_k^-,\ R_{\min},\ R_{\max}
+\operatorname{clip}\!\left(
+\widehat{S}_{k}-P_{k}^{-},\ R_{\min},\ R_{\max}
 \right)
 $$
 
-Here $P_k^-$ is the predicted heading variance, $R_{\min}$ and $R_{\max}$
-are the configured variance bounds, and $\beta$ is
-`wheel_noise_adaptation_rate`. The launch parameters expose standard-deviation
-bounds, so $R_{\min}=\sigma_{\min}^2$ and $R_{\max}=\sigma_{\max}^2$. The
-corresponding gain remains
+Here $\nu_{k}$ is measured in radians, while $\widehat{S}_{k}$, $P_{k}^{-}$,
+and $R_{\mathrm{wheel},k}$ are variances in $\mathrm{rad}^{2}$. The launch
+parameters expose standard-deviation bounds, so
+$R_{\min}=\sigma_{\min}^{2}$ and $R_{\max}=\sigma_{\max}^{2}$. The
+adaptation rate is `wheel_noise_adaptation_rate`. The corresponding gain
+remains
 
 $$
 K_k = \frac{P_k^-}{P_k^-+R_{\mathrm{wheel},k}}

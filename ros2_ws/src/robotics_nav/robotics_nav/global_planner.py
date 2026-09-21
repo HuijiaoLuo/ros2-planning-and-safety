@@ -175,6 +175,8 @@ class GlobalPlanner(Node):
                 cell = (column, row)
                 if not self.cell_is_occupied(grid, cell):
                     continue
+                # This square neighborhood is the discrete footprint
+                # dilation. Every cell in it is unsafe for the robot center.
                 for dx in range(-radius_cells, radius_cells + 1):
                     for dy in range(-radius_cells, radius_cells + 1):
                         inflated = (column + dx, row + dy)
@@ -204,6 +206,8 @@ class GlobalPlanner(Node):
 
         frontier: list[tuple[float, int, Cell]] = []
         counter = 0
+        # Heap entries are (f, insertion_order, cell). The insertion counter
+        # gives deterministic behavior when several cells have equal f.
         heapq.heappush(frontier, (0.0, counter, start))
         parent: dict[Cell, Cell] = {}
         cost_so_far = {start: 0.0}
@@ -214,6 +218,9 @@ class GlobalPlanner(Node):
                 return self.reconstruct_path(parent, start, goal)
 
             for neighbor in self.neighbors(grid, occupied, current):
+                # All moves are cardinal and unit cost. ``cost_so_far`` is
+                # still kept explicitly so this loop has the standard A*
+                # relaxation structure and can later support weighted costs.
                 new_cost = cost_so_far[current] + 1.0
                 if new_cost >= cost_so_far.get(neighbor, float("inf")):
                     continue
@@ -221,6 +228,8 @@ class GlobalPlanner(Node):
                 parent[neighbor] = current
                 counter += 1
                 priority = new_cost + self.manhattan(neighbor, goal)
+                # Manhattan h is admissible for 4-connected unit-cost motion:
+                # it never overestimates the number of required grid steps.
                 heapq.heappush(frontier, (priority, counter, neighbor))
 
         return None
