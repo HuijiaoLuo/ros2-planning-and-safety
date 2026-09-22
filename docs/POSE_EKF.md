@@ -93,10 +93,13 @@ measurement update may then change the estimate. In fixed mode, the equivalent
 mean model is simply
 
 $$
-b_{g,k}^{-}=b_{g,k}=b_{g,0},
-\qquad
-b_{g,0}=\texttt{initial\_gyro\_bias\_rad\_s}.
+b_{g,k}^{-}=b_{g,k}=b_{g,0}.
 $$
+
+Here $b_{g,0}$ is the configured initial bias supplied by
+`initial_gyro_bias_rad_s`. Keeping the parameter name in ordinary Markdown
+code formatting avoids putting underscores inside a math command, which is
+not supported by all Markdown equation renderers.
 
 This distinction is important for diagnosis. With only gyro rate and wheel
 yaw, a persistent wheel-yaw modelling error can be absorbed by an estimated
