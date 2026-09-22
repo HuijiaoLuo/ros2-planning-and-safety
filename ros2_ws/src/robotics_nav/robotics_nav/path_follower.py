@@ -114,6 +114,11 @@ class PathFollower(Node):
         self.latest_path: Optional[Path] = None
         self.latest_odom: Optional[Odometry] = None
         self.goal_reached = False
+        # The planner may republish a path while the robot is already inside
+        # the goal tolerance.  Keep the endpoint separately so that a normal
+        # replan (same destination, different start prefix) does not clear
+        # the terminal-stop state and command the robot to move again.
+        self.goal_endpoint: Optional[tuple[float, float]] = None
         self.last_control_state: Optional[str] = None
 
     def report_state(self, state: str) -> None:
@@ -124,15 +129,32 @@ class PathFollower(Node):
 
     def path_callback(self, message: Path) -> None:
         self.latest_path = message
-        self.goal_reached = False
-        self.last_control_state = None
         if message.poses:
             endpoint = message.poses[-1].pose.position
+            new_endpoint = (float(endpoint.x), float(endpoint.y))
+            if self.goal_endpoint is None:
+                # The first path establishes the destination for this run.
+                self.goal_reached = False
+                self.last_control_state = None
+            else:
+                endpoint_change = math.hypot(
+                    new_endpoint[0] - self.goal_endpoint[0],
+                    new_endpoint[1] - self.goal_endpoint[1],
+                )
+                if endpoint_change > max(self.goal_tolerance, 1e-3):
+                    # A materially different endpoint is a new navigation
+                    # task, so a previous terminal-stop decision is invalid.
+                    self.goal_reached = False
+                    self.last_control_state = None
+            self.goal_endpoint = new_endpoint
             self.get_logger().info(
                 f"Received path with {len(message.poses)} poses; "
                 f"endpoint=({endpoint.x:.2f}, {endpoint.y:.2f})."
             )
         else:
+            self.goal_endpoint = None
+            self.goal_reached = False
+            self.last_control_state = None
             self.get_logger().warn("Received an empty path.")
 
     def odom_callback(self, message: Odometry) -> None:
@@ -205,6 +227,16 @@ class PathFollower(Node):
 
         goal = self.latest_path.poses[-1].pose.position
         goal_distance = math.hypot(goal.x - position.x, goal.y - position.y)
+        if self.goal_reached:
+            # Once this endpoint has been reached, keep publishing zero
+            # velocity even if estimator noise moves the reported distance a
+            # few centimetres outside the tolerance.  A new endpoint is the
+            # only event that clears the latch in path_callback().
+            self.report_state(
+                f"Stopped at latched endpoint; distance={goal_distance:.3f} m."
+            )
+            self.publish_stop()
+            return
         if goal_distance <= self.goal_tolerance:
             if not self.goal_reached:
                 self.get_logger().info("Planned path goal reached.")

@@ -22,7 +22,7 @@ from rclpy.qos import (
 )
 from sensor_msgs.msg import LaserScan
 from ros_gz_interfaces.msg import Contacts
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float64, String
 
 
 def distance_2d(first_x: float, first_y: float, second_x: float, second_y: float) -> float:
@@ -53,6 +53,38 @@ class EvaluationLogger(Node):
         self.declare_parameter("planning_radius_m", 0.35)
         self.declare_parameter("experiment_timeout_s", 0.0)
         self.declare_parameter("navigation_pose_topic", "/odom")
+        # These topics are diagnostics only.  None of them is used to affect
+        # the planner, follower, or safety supervisor.
+        self.declare_parameter("state_estimate_topic", "/state_estimate")
+        self.declare_parameter(
+            "localization_candidate_correction_topic",
+            "/localization_candidate_correction_m",
+        )
+        self.declare_parameter(
+            "localization_candidate_dx_topic", "/localization_candidate_dx_m"
+        )
+        self.declare_parameter(
+            "localization_candidate_dy_topic", "/localization_candidate_dy_m"
+        )
+        self.declare_parameter(
+            "localization_applied_dx_topic", "/localization_applied_dx_m"
+        )
+        self.declare_parameter(
+            "localization_applied_dy_topic", "/localization_applied_dy_m"
+        )
+        self.declare_parameter(
+            "localization_match_valid_topic", "/localization_match_valid"
+        )
+        self.declare_parameter(
+            "localization_match_status_topic", "/localization_match_status"
+        )
+        self.declare_parameter(
+            "localization_match_score_topic", "/localization_match_score_m"
+        )
+        self.declare_parameter(
+            "localization_score_improvement_topic",
+            "/localization_score_improvement_m",
+        )
 
         self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
         self.front_angle = math.radians(
@@ -91,12 +123,43 @@ class EvaluationLogger(Node):
         self.navigation_pose_topic = str(
             self.get_parameter("navigation_pose_topic").value
         )
+        self.state_estimate_topic = str(
+            self.get_parameter("state_estimate_topic").value
+        )
+        self.localization_candidate_correction_topic = str(
+            self.get_parameter("localization_candidate_correction_topic").value
+        )
+        self.localization_candidate_dx_topic = str(
+            self.get_parameter("localization_candidate_dx_topic").value
+        )
+        self.localization_candidate_dy_topic = str(
+            self.get_parameter("localization_candidate_dy_topic").value
+        )
+        self.localization_applied_dx_topic = str(
+            self.get_parameter("localization_applied_dx_topic").value
+        )
+        self.localization_applied_dy_topic = str(
+            self.get_parameter("localization_applied_dy_topic").value
+        )
+        self.localization_match_valid_topic = str(
+            self.get_parameter("localization_match_valid_topic").value
+        )
+        self.localization_match_status_topic = str(
+            self.get_parameter("localization_match_status_topic").value
+        )
+        self.localization_match_score_topic = str(
+            self.get_parameter("localization_match_score_topic").value
+        )
+        self.localization_score_improvement_topic = str(
+            self.get_parameter("localization_score_improvement_topic").value
+        )
         safety_override_topic = str(
             self.get_parameter("safety_override_topic").value
         )
 
         self.latest_odom: Optional[Odometry] = None
         self.latest_navigation_pose: Optional[Odometry] = None
+        self.latest_state_estimate: Optional[Odometry] = None
         self.latest_plan: Optional[NavPath] = None
         self.initial_plan: Optional[NavPath] = None
         self.latest_map: Optional[OccupancyGrid] = None
@@ -104,6 +167,15 @@ class EvaluationLogger(Node):
         self.latest_raw_command: Optional[Twist] = None
         self.latest_override_state: Optional[bool] = None
         self.collision_state: Optional[bool] = None
+        self.latest_localization_candidate_correction_m: Optional[float] = None
+        self.latest_localization_candidate_dx_m: Optional[float] = None
+        self.latest_localization_candidate_dy_m: Optional[float] = None
+        self.latest_localization_applied_dx_m: Optional[float] = None
+        self.latest_localization_applied_dy_m: Optional[float] = None
+        self.latest_localization_match_valid: Optional[bool] = None
+        self.latest_localization_match_status: Optional[str] = None
+        self.latest_localization_match_score_m: Optional[float] = None
+        self.latest_localization_score_improvement_m: Optional[float] = None
 
         self.start_x: Optional[float] = None
         self.start_y: Optional[float] = None
@@ -118,6 +190,7 @@ class EvaluationLogger(Node):
         self.started_at: Optional[float] = None
         self.goal_reached_at: Optional[float] = None
         self.navigation_goal_reached_at: Optional[float] = None
+        self.state_estimate_goal_reached_at: Optional[float] = None
         self.termination_reason: Optional[str] = None
 
         self.travelled_distance = 0.0
@@ -148,6 +221,12 @@ class EvaluationLogger(Node):
                 self.navigation_pose_callback,
                 qos_profile_sensor_data,
             )
+        self.create_subscription(
+            Odometry,
+            self.state_estimate_topic,
+            self.state_estimate_callback,
+            qos_profile_sensor_data,
+        )
         self.create_subscription(NavPath, "/plan", self.plan_callback, path_qos)
         self.create_subscription(OccupancyGrid, "/map", self.map_callback, path_qos)
         self.create_subscription(
@@ -172,6 +251,60 @@ class EvaluationLogger(Node):
             Contacts,
             self.collision_topic,
             self.collision_callback,
+            10,
+        )
+        self.create_subscription(
+            Float64,
+            self.localization_candidate_correction_topic,
+            self.localization_candidate_correction_callback,
+            10,
+        )
+        self.create_subscription(
+            Float64,
+            self.localization_candidate_dx_topic,
+            self.localization_candidate_dx_callback,
+            10,
+        )
+        self.create_subscription(
+            Float64,
+            self.localization_candidate_dy_topic,
+            self.localization_candidate_dy_callback,
+            10,
+        )
+        self.create_subscription(
+            Float64,
+            self.localization_applied_dx_topic,
+            self.localization_applied_dx_callback,
+            10,
+        )
+        self.create_subscription(
+            Float64,
+            self.localization_applied_dy_topic,
+            self.localization_applied_dy_callback,
+            10,
+        )
+        self.create_subscription(
+            Bool,
+            self.localization_match_valid_topic,
+            self.localization_match_valid_callback,
+            10,
+        )
+        self.create_subscription(
+            String,
+            self.localization_match_status_topic,
+            self.localization_match_status_callback,
+            10,
+        )
+        self.create_subscription(
+            Float64,
+            self.localization_match_score_topic,
+            self.localization_match_score_callback,
+            10,
+        )
+        self.create_subscription(
+            Float64,
+            self.localization_score_improvement_topic,
+            self.localization_score_improvement_callback,
             10,
         )
         self.timer = self.create_timer(1.0 / sample_rate, self.sample)
@@ -201,6 +334,10 @@ class EvaluationLogger(Node):
 
     def navigation_pose_callback(self, message: Odometry) -> None:
         self.latest_navigation_pose = message
+
+    def state_estimate_callback(self, message: Odometry) -> None:
+        """Record the pre-localization state estimate for diagnosis only."""
+        self.latest_state_estimate = message
 
     def plan_callback(self, message: NavPath) -> None:
         """Track the initial/latest rasterized plan and its endpoint."""
@@ -239,6 +376,33 @@ class EvaluationLogger(Node):
 
     def collision_callback(self, message: Contacts) -> None:
         self.collision_state = bool(message.contacts)
+
+    def localization_candidate_correction_callback(self, message: Float64) -> None:
+        self.latest_localization_candidate_correction_m = float(message.data)
+
+    def localization_candidate_dx_callback(self, message: Float64) -> None:
+        self.latest_localization_candidate_dx_m = float(message.data)
+
+    def localization_candidate_dy_callback(self, message: Float64) -> None:
+        self.latest_localization_candidate_dy_m = float(message.data)
+
+    def localization_applied_dx_callback(self, message: Float64) -> None:
+        self.latest_localization_applied_dx_m = float(message.data)
+
+    def localization_applied_dy_callback(self, message: Float64) -> None:
+        self.latest_localization_applied_dy_m = float(message.data)
+
+    def localization_match_valid_callback(self, message: Bool) -> None:
+        self.latest_localization_match_valid = bool(message.data)
+
+    def localization_match_status_callback(self, message: String) -> None:
+        self.latest_localization_match_status = str(message.data)
+
+    def localization_match_score_callback(self, message: Float64) -> None:
+        self.latest_localization_match_score_m = float(message.data)
+
+    def localization_score_improvement_callback(self, message: Float64) -> None:
+        self.latest_localization_score_improvement_m = float(message.data)
 
     @staticmethod
     def yaw_from_quaternion(orientation) -> float:
@@ -345,6 +509,7 @@ class EvaluationLogger(Node):
             else self.latest_navigation_pose
         )
         ground_truth_goal_distance: Optional[float] = None
+        state_estimate_goal_distance: Optional[float] = None
         navigation_goal_distance: Optional[float] = None
         if self.goal_x is not None and self.goal_y is not None:
             ground_truth_goal_distance = distance_2d(
@@ -371,11 +536,38 @@ class EvaluationLogger(Node):
                     and self.navigation_goal_reached_at is None
                 ):
                     self.navigation_goal_reached_at = now
+            if self.latest_state_estimate is not None:
+                state_position = self.latest_state_estimate.pose.pose.position
+                state_estimate_goal_distance = distance_2d(
+                    state_position.x,
+                    state_position.y,
+                    self.goal_x,
+                    self.goal_y,
+                )
+                if (
+                    state_estimate_goal_distance <= self.goal_tolerance
+                    and self.state_estimate_goal_reached_at is None
+                ):
+                    self.state_estimate_goal_reached_at = now
 
         navigation_position = (
             None
             if navigation_pose is None
             else navigation_pose.pose.pose.position
+        )
+        state_estimate_position = (
+            None
+            if self.latest_state_estimate is None
+            else self.latest_state_estimate.pose.pose.position
+        )
+        applied_correction = (
+            None
+            if self.latest_localization_applied_dx_m is None
+            or self.latest_localization_applied_dy_m is None
+            else math.hypot(
+                self.latest_localization_applied_dx_m,
+                self.latest_localization_applied_dy_m,
+            )
         )
 
         raw_linear_x = (
@@ -395,8 +587,19 @@ class EvaluationLogger(Node):
                 "navigation_y_m": (
                     None if navigation_position is None else navigation_position.y
                 ),
+                "state_estimate_x_m": (
+                    None
+                    if state_estimate_position is None
+                    else state_estimate_position.x
+                ),
+                "state_estimate_y_m": (
+                    None
+                    if state_estimate_position is None
+                    else state_estimate_position.y
+                ),
                 "ground_truth_goal_error_m": ground_truth_goal_distance,
                 "navigation_goal_error_m": navigation_goal_distance,
+                "state_estimate_goal_error_m": state_estimate_goal_distance,
                 "yaw_rad": self.yaw_from_quaternion(
                     self.latest_odom.pose.pose.orientation
                 ),
@@ -407,6 +610,20 @@ class EvaluationLogger(Node):
                 "front_clearance_m": clearance,
                 "safety_override": self.latest_override_state,
                 "collision": self.collision_state,
+                "localization_candidate_correction_m": (
+                    self.latest_localization_candidate_correction_m
+                ),
+                "localization_candidate_dx_m": self.latest_localization_candidate_dx_m,
+                "localization_candidate_dy_m": self.latest_localization_candidate_dy_m,
+                "localization_applied_correction_m": applied_correction,
+                "localization_applied_dx_m": self.latest_localization_applied_dx_m,
+                "localization_applied_dy_m": self.latest_localization_applied_dy_m,
+                "localization_match_valid": self.latest_localization_match_valid,
+                "localization_match_status": self.latest_localization_match_status,
+                "localization_match_score_m": self.latest_localization_match_score_m,
+                "localization_score_improvement_m": (
+                    self.latest_localization_score_improvement_m
+                ),
             }
         )
 
@@ -452,6 +669,20 @@ class EvaluationLogger(Node):
                 self.goal_y,
             )
 
+        state_estimate_final_error: Optional[float] = None
+        if (
+            self.latest_state_estimate is not None
+            and self.goal_x is not None
+            and self.goal_y is not None
+        ):
+            position = self.latest_state_estimate.pose.pose.position
+            state_estimate_final_error = distance_2d(
+                position.x,
+                position.y,
+                self.goal_x,
+                self.goal_y,
+            )
+
         elapsed = None if self.started_at is None else now - self.started_at
         time_to_goal = (
             None
@@ -463,6 +694,12 @@ class EvaluationLogger(Node):
             if self.started_at is None
             or self.navigation_goal_reached_at is None
             else self.navigation_goal_reached_at - self.started_at
+        )
+        state_estimate_time_to_goal = (
+            None
+            if self.started_at is None
+            or self.state_estimate_goal_reached_at is None
+            else self.state_estimate_goal_reached_at - self.started_at
         )
         navigation_goal_error_gap = (
             None
@@ -490,6 +727,11 @@ class EvaluationLogger(Node):
             "final_error_m": final_error,
             "ground_truth_final_error_m": final_error,
             "navigation_pose_final_error_m": navigation_final_error,
+            "state_estimate_topic": self.state_estimate_topic,
+            "state_estimate_goal_reached": (
+                self.state_estimate_goal_reached_at is not None
+            ),
+            "state_estimate_final_error_m": state_estimate_final_error,
             "navigation_pose_goal_error_gap_m": navigation_goal_error_gap,
             "navigation_pose_reached_before_ground_truth": (
                 navigation_reached_before_ground_truth
@@ -497,6 +739,7 @@ class EvaluationLogger(Node):
             "elapsed_time_s": elapsed,
             "time_to_goal_s": time_to_goal,
             "navigation_pose_time_to_goal_s": navigation_time_to_goal,
+            "state_estimate_time_to_goal_s": state_estimate_time_to_goal,
             "initial_planned_path_length_m": self.initial_planned_path_length,
             "latest_planned_path_length_m": self.latest_planned_path_length,
             "plan_update_count": self.plan_update_count,
@@ -547,6 +790,28 @@ class EvaluationLogger(Node):
                 if self.collision_state is None
                 else str(self.collision_state).lower()
             ),
+            "localization_match_valid": self.latest_localization_match_valid,
+            "localization_match_status": self.latest_localization_match_status,
+            "localization_candidate_correction_m": (
+                self.latest_localization_candidate_correction_m
+            ),
+            "localization_candidate_dx_m": self.latest_localization_candidate_dx_m,
+            "localization_candidate_dy_m": self.latest_localization_candidate_dy_m,
+            "localization_applied_correction_m": (
+                None
+                if self.latest_localization_applied_dx_m is None
+                or self.latest_localization_applied_dy_m is None
+                else math.hypot(
+                    self.latest_localization_applied_dx_m,
+                    self.latest_localization_applied_dy_m,
+                )
+            ),
+            "localization_applied_dx_m": self.latest_localization_applied_dx_m,
+            "localization_applied_dy_m": self.latest_localization_applied_dy_m,
+            "localization_match_score_m": self.latest_localization_match_score_m,
+            "localization_score_improvement_m": (
+                self.latest_localization_score_improvement_m
+            ),
             "samples": self.sample_count,
         }
 
@@ -574,8 +839,11 @@ class EvaluationLogger(Node):
                 "y_m",
                 "navigation_x_m",
                 "navigation_y_m",
+                "state_estimate_x_m",
+                "state_estimate_y_m",
                 "ground_truth_goal_error_m",
                 "navigation_goal_error_m",
+                "state_estimate_goal_error_m",
                 "yaw_rad",
                 "goal_x_m",
                 "goal_y_m",
@@ -584,6 +852,16 @@ class EvaluationLogger(Node):
                 "front_clearance_m",
                 "safety_override",
                 "collision",
+                "localization_candidate_correction_m",
+                "localization_candidate_dx_m",
+                "localization_candidate_dy_m",
+                "localization_applied_correction_m",
+                "localization_applied_dx_m",
+                "localization_applied_dy_m",
+                "localization_match_valid",
+                "localization_match_status",
+                "localization_match_score_m",
+                "localization_score_improvement_m",
             ]
             with trace_path.open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.DictWriter(handle, fieldnames=trace_fields)

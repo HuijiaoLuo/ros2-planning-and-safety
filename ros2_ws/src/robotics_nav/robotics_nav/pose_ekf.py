@@ -1,8 +1,9 @@
 """Small covariance-aware EKF for wheel-speed and IMU heading fusion.
 
 The filter is intentionally limited to the quantities available in this
-project.  It estimates ``[x, y, yaw, gyro_bias]``.  Wheel forward speed and
-the measured IMU yaw rate drive the prediction; wheel yaw is the scalar
+project.  It estimates ``[x, y, yaw, gyro_bias, wheel_yaw_bias]``.  Wheel
+forward speed and the measured IMU yaw rate drive the prediction; wheel yaw is
+the scalar
 measurement update.  Gazebo ground truth is never an input to this class.
 
 This is a transparent V4 experiment rather than a replacement for a general
@@ -64,13 +65,18 @@ def _symmetrize(matrix: Matrix) -> Matrix:
 
 
 class PoseEKF:
-    """Estimate planar pose and gyro bias with a four-state EKF.
+    """Estimate planar pose and sensor biases with a five-state EKF.
 
-    The state is ``[x, y, theta, b_g]``.  The process model is a unicycle
-    approximation driven by body-forward wheel speed and bias-corrected gyro
-    rate.  Wheel yaw is deliberately used only as a heading measurement; this
-    avoids treating the integrated wheel pose as an independent absolute
-    position sensor and makes wheel slip visible in the position covariance.
+    The state is ``[x, y, theta, b_g, b_w]``.  ``b_g`` is the gyro rate bias;
+    ``b_w`` is a slowly varying wheel-yaw bias.  In ``estimated`` mode, the
+    EKF may update ``b_g`` from wheel-yaw innovations.  In ``fixed`` mode,
+    ``b_g`` is a pre-calibrated constant and wheel yaw cannot change it.  The
+    process model is a
+    unicycle approximation driven by body-forward wheel speed and
+    bias-corrected gyro rate.  Wheel yaw is deliberately used only as a
+    heading measurement; this avoids treating the integrated wheel pose as an
+    independent absolute position sensor and makes wheel slip visible in the
+    position covariance.
     """
 
     def __init__(
@@ -81,9 +87,14 @@ class PoseEKF:
         gyro_bias_random_walk_std_rad_s2: float = 0.001,
         wheel_speed_noise_std_m_s: float = 0.02,
         wheel_slip_ratio: float = 0.0,
+        wheel_slip_noise_std: float = 0.0,
         initial_position_variance_m2: float = 0.25,
         initial_heading_variance_rad2: float = 0.25,
         initial_bias_variance_rad2_s2: float = 0.01,
+        gyro_bias_mode: str = "estimated",
+        initial_gyro_bias_rad_s: float = 0.0,
+        initial_wheel_yaw_bias_variance_rad2: float = 0.01,
+        wheel_yaw_bias_random_walk_std_rad_sqrt_s: float = 0.001,
         nis_gate_threshold: float = 9.0,
     ) -> None:
         self.gyro_rate_noise_std = max(0.0, float(gyro_rate_noise_std_rad_s))
@@ -93,20 +104,42 @@ class PoseEKF:
         self.bias_random_walk_variance = max(
             0.0, float(gyro_bias_random_walk_std_rad_s2) ** 2
         )
+        self.wheel_yaw_bias_random_walk_variance = max(
+            0.0, float(wheel_yaw_bias_random_walk_std_rad_sqrt_s) ** 2
+        )
+        self.gyro_bias_mode = str(gyro_bias_mode).strip().lower()
+        if self.gyro_bias_mode not in {"estimated", "fixed"}:
+            raise ValueError("gyro_bias_mode must be 'estimated' or 'fixed'")
+        self.initial_gyro_bias_rad_s = float(initial_gyro_bias_rad_s)
         self.wheel_speed_noise_variance = max(
             0.0, float(wheel_speed_noise_std_m_s) ** 2
         )
         self.translation_scale = 1.0 - max(
             0.0, min(0.99, float(wheel_slip_ratio))
         )
+        # This is the standard deviation of the *unknown deviation* around
+        # the configured slip ratio.  The mean model still uses
+        # ``wheel_slip_ratio``; this separate term only tells the covariance
+        # how uncertain that mean translation is during propagation.
+        self.wheel_slip_noise_variance = max(
+            0.0, float(wheel_slip_noise_std) ** 2
+        )
         self.nis_gate_threshold = max(0.0, float(nis_gate_threshold))
 
-        self.state: State = [0.0, 0.0, 0.0, 0.0]
-        self.covariance: Matrix = _identity(4)
+        self.state: State = [0.0, 0.0, 0.0, self.initial_gyro_bias_rad_s, 0.0]
+        self.covariance: Matrix = _identity(5)
         self.covariance[0][0] = max(1.0e-12, float(initial_position_variance_m2))
         self.covariance[1][1] = max(1.0e-12, float(initial_position_variance_m2))
         self.covariance[2][2] = max(1.0e-12, float(initial_heading_variance_rad2))
-        self.covariance[3][3] = max(1.0e-12, float(initial_bias_variance_rad2_s2))
+        self.covariance[3][3] = (
+            max(1.0e-12, float(initial_bias_variance_rad2_s2))
+            if self.gyro_bias_mode == "estimated"
+            else 1.0e-12
+        )
+        self.covariance[4][4] = max(
+            1.0e-12,
+            float(initial_wheel_yaw_bias_variance_rad2),
+        )
 
         self.initialized = False
         self.wheel_yaw: float | None = None
@@ -117,6 +150,22 @@ class PoseEKF:
         self.last_nis = 0.0
         self.last_measurement_accepted = True
 
+    def _enforce_fixed_gyro_bias(self) -> None:
+        """Keep a calibrated gyro bias out of wheel-yaw state updates.
+
+        In ``fixed`` mode the bias is a calibration constant, not an EKF
+        state that can absorb wheel-yaw model error.  Clearing its covariance
+        row and column also removes the cross-covariance route through which a
+        wheel-yaw update could otherwise change the bias indirectly.
+        """
+        if self.gyro_bias_mode != "fixed":
+            return
+        self.state[3] = self.initial_gyro_bias_rad_s
+        for index in range(5):
+            self.covariance[3][index] = 0.0
+            self.covariance[index][3] = 0.0
+        self.covariance[3][3] = 1.0e-12
+
     @property
     def ready(self) -> bool:
         return self.initialized and self.wheel_yaw is not None
@@ -124,6 +173,11 @@ class PoseEKF:
     @property
     def bias_estimate(self) -> float:
         return self.state[3]
+
+    @property
+    def wheel_yaw_bias_estimate(self) -> float:
+        """Return the estimated slowly varying wheel-yaw bias in radians."""
+        return self.state[4]
 
     @property
     def wheel_yaw_noise_std_estimate(self) -> float:
@@ -160,7 +214,11 @@ class PoseEKF:
         """Initialize or update the filter with wheel yaw.
 
         The first wheel message establishes the local position and heading.
-        Later wheel messages perform a one-dimensional Kalman update on yaw.
+        Later wheel messages perform a one-dimensional Kalman update on yaw and
+        wheel-yaw bias. The measurement model is
+        ``wheel_yaw = theta + wheel_yaw_bias + white_noise``. This prevents
+        repeated correlated wheel measurements from falsely driving the
+        heading covariance toward zero.
         A normalized innovation squared (NIS) gate rejects implausible yaw
         measurements without changing the predicted state or covariance.
         """
@@ -178,8 +236,17 @@ class PoseEKF:
             self.last_measurement_accepted = True
             return self.state[2]
 
-        innovation = wrap_angle(wheel_yaw - self.state[2])
-        measurement_variance = self.covariance[2][2] + self.wheel_yaw_noise_variance
+        measurement_jacobian = [0.0, 0.0, 1.0, 0.0, 1.0]
+        predicted_wheel_yaw = self.state[2] + self.state[4]
+        innovation = wrap_angle(wheel_yaw - predicted_wheel_yaw)
+        measurement_variance = self.wheel_yaw_noise_variance
+        for row in range(5):
+            for column in range(5):
+                measurement_variance += (
+                    measurement_jacobian[row]
+                    * self.covariance[row][column]
+                    * measurement_jacobian[column]
+                )
         measurement_variance = max(1.0e-12, measurement_variance)
         nis = innovation * innovation / measurement_variance
         self.last_innovation = innovation
@@ -190,20 +257,32 @@ class PoseEKF:
             self.last_measurement_accepted = False
             return self.state[2]
 
-        gain = [self.covariance[row][2] / measurement_variance for row in range(4)]
-        for row in range(4):
+        gain = [
+            sum(
+                self.covariance[row][column] * measurement_jacobian[column]
+                for column in range(5)
+            )
+            / measurement_variance
+            for row in range(5)
+        ]
+        if self.gyro_bias_mode == "fixed":
+            # H has no direct gyro-bias term, but P can create an indirect
+            # gain.  A fixed calibrated bias must not be changed by wheel yaw.
+            gain[3] = 0.0
+        for row in range(5):
             self.state[row] += gain[row] * innovation
         self.state[2] = wrap_angle(self.state[2])
 
         # Joseph-form covariance update keeps the matrix positive-semidefinite
         # more reliably than subtracting KHP directly after repeated updates.
-        identity = _identity(4)
-        for row in range(4):
-            for column in range(4):
-                identity[row][column] -= gain[row] * (1.0 if column == 2 else 0.0)
+        identity = _identity(5)
+        for row in range(5):
+            for column in range(5):
+                identity[row][column] -= gain[row] * measurement_jacobian[column]
         updated = _matmul(_matmul(identity, self.covariance), _transpose(identity))
         _add_in_place(updated, _outer(gain, self.wheel_yaw_noise_variance))
         self.covariance = _symmetrize(updated)
+        self._enforce_fixed_gyro_bias()
         self.last_gain = gain[2]
         self.last_measurement_accepted = True
         return self.state[2]
@@ -215,7 +294,7 @@ class PoseEKF:
         if self.last_imu_stamp is not None:
             delta_time = float(stamp) - self.last_imu_stamp
             if 0.0 < delta_time <= 1.0:
-                old_x, old_y, old_heading, old_bias = self.state
+                old_x, old_y, old_heading, old_bias, _old_wheel_yaw_bias = self.state
                 corrected_rate = float(angular_velocity_z) - old_bias
                 distance = (
                     self.latest_wheel_speed_m_s
@@ -233,16 +312,20 @@ class PoseEKF:
 
                 # F is the Jacobian of the midpoint unicycle model.  The
                 # bias derivatives show how gyro bias eventually bends x/y.
-                state_transition = _identity(4)
+                state_transition = _identity(5)
                 state_transition[0][2] = -distance * math.sin(midpoint_heading)
                 state_transition[1][2] = distance * math.cos(midpoint_heading)
                 state_transition[0][3] = (
-                    -0.5 * distance * delta_time * math.sin(midpoint_heading)
+                    0.5 * distance * delta_time * math.sin(midpoint_heading)
                 )
                 state_transition[1][3] = (
                     -0.5 * distance * delta_time * math.cos(midpoint_heading)
                 )
                 state_transition[2][3] = -delta_time
+                if self.gyro_bias_mode == "fixed":
+                    state_transition[0][3] = 0.0
+                    state_transition[1][3] = 0.0
+                    state_transition[2][3] = 0.0
 
                 # Q contains independent gyro-rate, wheel-speed, and bias
                 # random-walk contributions.  The first two are expressed as
@@ -252,10 +335,28 @@ class PoseEKF:
                     0.5 * distance * delta_time * math.cos(midpoint_heading),
                     delta_time,
                     0.0,
+                    0.0,
                 ]
                 speed_sensitivity = [
                     self.translation_scale * delta_time * math.cos(midpoint_heading),
                     self.translation_scale * delta_time * math.sin(midpoint_heading),
+                    0.0,
+                    0.0,
+                    0.0,
+                ]
+                # If the actual slip fraction differs from the configured
+                # value by δs, the travelled distance changes by -v*dt*δs.
+                # This sensitivity maps slip-fraction uncertainty into x/y
+                # position covariance without pretending that slip is directly
+                # observable from the available yaw measurements.
+                slip_sensitivity = [
+                    -self.latest_wheel_speed_m_s
+                    * delta_time
+                    * math.cos(midpoint_heading),
+                    -self.latest_wheel_speed_m_s
+                    * delta_time
+                    * math.sin(midpoint_heading),
+                    0.0,
                     0.0,
                     0.0,
                 ]
@@ -266,8 +367,17 @@ class PoseEKF:
                     process_noise,
                     _outer(speed_sensitivity, self.wheel_speed_noise_variance),
                 )
+                _add_in_place(
+                    process_noise,
+                    _outer(slip_sensitivity, self.wheel_slip_noise_variance),
+                )
                 process_noise[3][3] += (
                     self.bias_random_walk_variance * delta_time
+                    if self.gyro_bias_mode == "estimated"
+                    else 0.0
+                )
+                process_noise[4][4] += (
+                    self.wheel_yaw_bias_random_walk_variance * delta_time
                 )
                 self.covariance = _symmetrize(
                     _matmul(
@@ -277,5 +387,6 @@ class PoseEKF:
                 )
                 _add_in_place(self.covariance, process_noise)
                 self.covariance = _symmetrize(self.covariance)
+                self._enforce_fixed_gyro_bias()
         self.last_imu_stamp = float(stamp)
         return self.state[2]

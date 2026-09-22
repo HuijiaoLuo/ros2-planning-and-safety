@@ -447,8 +447,18 @@ def main(args=None) -> None:
         if rclpy.ok():
             raise
     finally:
-        if rclpy.ok():
-            node.publish_stop()
+        # The evaluation logger can initiate shutdown at the same time that
+        # this node enters its cleanup block.  In that narrow window
+        # ``rclpy.ok()`` may still be true while the publisher's underlying
+        # DDS context has already been invalidated.  A final zero command is
+        # desirable, but failure to publish it during teardown must not turn a
+        # completed experiment into a process error.
+        try:
+            if rclpy.ok():
+                node.publish_stop()
+        except Exception:
+            pass
+
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

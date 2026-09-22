@@ -64,16 +64,25 @@ class HeadingEstimator(Node):
         self.declare_parameter("gyro_rate_noise_std_rad_s", 0.01)
         self.declare_parameter("wheel_yaw_noise_std_rad", 0.07)
         self.declare_parameter("gyro_bias_random_walk_std_rad_s2", 0.001)
+        self.declare_parameter("gyro_bias_mode", "estimated")
+        self.declare_parameter("initial_gyro_bias_rad_s", 0.0)
+        self.declare_parameter("wheel_yaw_bias_random_walk_std_rad_sqrt_s", 0.001)
+        self.declare_parameter("initial_position_variance_m2", 0.25)
         self.declare_parameter("initial_heading_variance_rad2", 0.25)
         self.declare_parameter("initial_bias_variance_rad2_s2", 0.01)
+        self.declare_parameter("initial_wheel_yaw_bias_variance_rad2", 0.01)
         self.declare_parameter("adaptive_wheel_noise", False)
         self.declare_parameter("wheel_yaw_noise_min_std_rad", 0.02)
         self.declare_parameter("wheel_yaw_noise_max_std_rad", 0.20)
         self.declare_parameter("wheel_noise_adaptation_rate", 0.05)
         self.declare_parameter("wheel_speed_noise_std_m_s", 0.02)
+        self.declare_parameter("wheel_slip_noise_std", 0.0)
         self.declare_parameter("nis_gate_threshold", 9.0)
         self.declare_parameter("fusion_gain_topic", "/heading_fusion_gain")
         self.declare_parameter("gyro_bias_estimate_topic", "/gyro_bias_estimate")
+        self.declare_parameter(
+            "wheel_yaw_bias_estimate_topic", "/wheel_yaw_bias_estimate"
+        )
         self.declare_parameter("heading_innovation_topic", "/heading_fusion_innovation")
         self.declare_parameter("heading_nis_topic", "/heading_fusion_nis")
         self.declare_parameter(
@@ -105,11 +114,24 @@ class HeadingEstimator(Node):
         bias_random_walk = float(
             self.get_parameter("gyro_bias_random_walk_std_rad_s2").value
         )
+        gyro_bias_mode = str(self.get_parameter("gyro_bias_mode").value).lower()
+        initial_gyro_bias = float(
+            self.get_parameter("initial_gyro_bias_rad_s").value
+        )
+        wheel_yaw_bias_random_walk = float(
+            self.get_parameter("wheel_yaw_bias_random_walk_std_rad_sqrt_s").value
+        )
+        initial_position_variance = float(
+            self.get_parameter("initial_position_variance_m2").value
+        )
         initial_heading_variance = float(
             self.get_parameter("initial_heading_variance_rad2").value
         )
         initial_bias_variance = float(
             self.get_parameter("initial_bias_variance_rad2_s2").value
+        )
+        initial_wheel_yaw_bias_variance = float(
+            self.get_parameter("initial_wheel_yaw_bias_variance_rad2").value
         )
         adaptive_wheel_noise = parameter_bool(
             self.get_parameter("adaptive_wheel_noise").value
@@ -125,6 +147,9 @@ class HeadingEstimator(Node):
         )
         wheel_speed_noise_std = float(
             self.get_parameter("wheel_speed_noise_std_m_s").value
+        )
+        wheel_slip_noise_std = float(
+            self.get_parameter("wheel_slip_noise_std").value
         )
         nis_gate_threshold = float(
             self.get_parameter("nis_gate_threshold").value
@@ -144,7 +169,8 @@ class HeadingEstimator(Node):
 
         # All modes consume the same wheel and IMU topics.  The fixed mode is
         # the transparent V3 baseline; adaptive mode tracks only heading/bias
-        # covariance; EKF mode propagates the full [x,y,yaw,bias] state.
+        # covariance; EKF mode propagates the full pose plus gyro and
+        # wheel-yaw bias states.
         if fusion_mode == "adaptive":
             self.fusion = AdaptiveHeadingFusion(
                 gyro_rate_noise_std_rad_s=gyro_rate_noise,
@@ -164,8 +190,14 @@ class HeadingEstimator(Node):
                 gyro_bias_random_walk_std_rad_s2=bias_random_walk,
                 wheel_speed_noise_std_m_s=wheel_speed_noise_std,
                 wheel_slip_ratio=wheel_slip_ratio,
+                wheel_slip_noise_std=wheel_slip_noise_std,
+                initial_position_variance_m2=initial_position_variance,
                 initial_heading_variance_rad2=initial_heading_variance,
                 initial_bias_variance_rad2_s2=initial_bias_variance,
+                gyro_bias_mode=gyro_bias_mode,
+                initial_gyro_bias_rad_s=initial_gyro_bias,
+                initial_wheel_yaw_bias_variance_rad2=initial_wheel_yaw_bias_variance,
+                wheel_yaw_bias_random_walk_std_rad_sqrt_s=wheel_yaw_bias_random_walk,
                 nis_gate_threshold=nis_gate_threshold,
             )
         elif fusion_mode == "fixed":
@@ -197,6 +229,11 @@ class HeadingEstimator(Node):
         self.bias_publisher = self.create_publisher(
             Float64,
             str(self.get_parameter("gyro_bias_estimate_topic").value),
+            10,
+        )
+        self.wheel_yaw_bias_publisher = self.create_publisher(
+            Float64,
+            str(self.get_parameter("wheel_yaw_bias_estimate_topic").value),
             10,
         )
         self.innovation_publisher = self.create_publisher(
@@ -239,12 +276,16 @@ class HeadingEstimator(Node):
             f"wheel_weight={wheel_weight:.3f}, "
             f"gyro_rate_noise={gyro_rate_noise:.4f} rad/s, "
             f"wheel_yaw_noise={wheel_yaw_noise:.4f} rad, "
+            f"wheel_yaw_bias_rw={wheel_yaw_bias_random_walk:.4f} rad/sqrt(s), "
             f"adaptive_wheel_noise={adaptive_wheel_noise}, "
             f"wheel_noise_bounds=({wheel_yaw_noise_min_std:.4f}, "
             f"{wheel_yaw_noise_max_std:.4f}) rad, "
             f"wheel_speed_noise={wheel_speed_noise_std:.4f} m/s, "
+            f"wheel_slip_noise_std={wheel_slip_noise_std:.4f}, "
             f"nis_gate={nis_gate_threshold:.3f}, "
             f"gyro_bias={gyro_bias:.4f} rad/s, "
+            f"gyro_bias_mode={gyro_bias_mode}, "
+            f"initial_gyro_bias={initial_gyro_bias:.4f} rad/s, "
             f"gyro_noise_std={gyro_noise:.4f} rad/s, seed={gyro_seed}, "
             f"wheel_slip_ratio={wheel_slip_ratio:.3f}."
             f" position_mode={position_mode}."
@@ -346,6 +387,9 @@ class HeadingEstimator(Node):
         self.gain_publisher.publish(Float64(data=float(self.fusion.last_gain)))
         self.bias_publisher.publish(
             Float64(data=float(self.fusion.bias_estimate))
+        )
+        self.wheel_yaw_bias_publisher.publish(
+            Float64(data=float(getattr(self.fusion, "wheel_yaw_bias_estimate", 0.0)))
         )
         self.innovation_publisher.publish(
             Float64(data=float(self.fusion.last_innovation))

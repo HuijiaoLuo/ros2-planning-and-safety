@@ -22,8 +22,10 @@ CONFIG_FIELDS = (
     "configured_imu_gyro_noise_std_rad_s",
     "configured_wheel_weight",
     "configured_wheel_slip_ratio",
+    "configured_wheel_slip_noise_std",
     "configured_position_mode",
     "configured_fusion_mode",
+    "configured_gyro_bias_mode",
     "configured_gyro_rate_noise_std_rad_s",
     "configured_wheel_yaw_noise_std_rad",
     "configured_gyro_bias_random_walk_std_rad_s2",
@@ -33,6 +35,12 @@ CONFIG_FIELDS = (
     "configured_wheel_noise_adaptation_rate",
     "configured_wheel_speed_noise_std_m_s",
     "configured_nis_gate_threshold",
+    "configured_wheel_yaw_bias_random_walk_std_rad_sqrt_s",
+    "configured_initial_position_variance_m2",
+    "configured_initial_heading_variance_rad2",
+    "configured_initial_bias_variance_rad2_s2",
+    "configured_initial_gyro_bias_rad_s",
+    "configured_initial_wheel_yaw_bias_variance_rad2",
 )
 
 REQUIRED_CONFIG_FIELDS = CONFIG_FIELDS[:2]
@@ -55,6 +63,7 @@ OUTPUT_FIELDS = (
     "mean_estimate_final_heading_error_rad",
     "mean_adaptive_wheel_yaw_noise_std_rad",
     "mean_final_wheel_yaw_noise_estimate_std_rad",
+    "mean_final_wheel_yaw_bias_estimate_rad",
     "mean_nis",
     "max_nis",
     "mean_wheel_measurement_rejection_count",
@@ -91,12 +100,15 @@ def normalized_config(row: dict[str, str]) -> tuple[object, ...]:
         if name in {
             "configured_position_mode",
             "configured_fusion_mode",
+            "configured_gyro_bias_mode",
             "configured_adaptive_wheel_noise",
         }:
             if name == "configured_fusion_mode":
                 default = "fixed"
             elif name == "configured_position_mode":
                 default = "wheel_pose"
+            elif name == "configured_gyro_bias_mode":
+                default = "estimated"
             else:
                 default = "false"
             value = row.get(name, default).strip().lower() or default
@@ -108,6 +120,10 @@ def normalized_config(row: dict[str, str]) -> tuple[object, ...]:
         # Older estimator reports predate the slip model and therefore imply
         # the default zero-slip configuration.
         if value is None and name == "configured_wheel_slip_ratio":
+            value = 0.0
+        if value is None and name == "configured_wheel_slip_noise_std":
+            # Older reports did not propagate slip uncertainty separately;
+            # they therefore represent the zero-uncertainty default.
             value = 0.0
         if value is None and name == "configured_wheel_weight":
             # Older reports used the estimator's historical default.
@@ -128,6 +144,18 @@ def normalized_config(row: dict[str, str]) -> tuple[object, ...]:
             value = 0.02
         if value is None and name == "configured_nis_gate_threshold":
             value = 9.0
+        if value is None and name == "configured_wheel_yaw_bias_random_walk_std_rad_sqrt_s":
+            value = 0.001
+        if value is None and name == "configured_initial_position_variance_m2":
+            value = 0.25
+        if value is None and name == "configured_initial_heading_variance_rad2":
+            value = 0.25
+        if value is None and name == "configured_initial_bias_variance_rad2_s2":
+            value = 0.01
+        if value is None and name == "configured_initial_gyro_bias_rad_s":
+            value = 0.0
+        if value is None and name == "configured_initial_wheel_yaw_bias_variance_rad2":
+            value = 0.01
         if value is None:
             raise ValueError(f"Missing required configuration field: {name}")
         values.append(round(value, 9))
@@ -194,6 +222,10 @@ def summary_for_rows(rows: list[dict[str, str]]) -> dict[str, object]:
     summary["mean_final_wheel_yaw_noise_estimate_std_rad"] = (
         mean(final_noise_values) if final_noise_values else None
     )
+    bias_values = values_for(rows, "final_wheel_yaw_bias_estimate_rad")
+    summary["mean_final_wheel_yaw_bias_estimate_rad"] = (
+        mean(bias_values) if bias_values else None
+    )
     nis_values = values_for(rows, "nis_mean")
     max_nis_values = values_for(rows, "nis_max")
     rejection_values = values_for(rows, "wheel_measurement_rejection_count")
@@ -249,6 +281,7 @@ def print_summary(summaries: list[dict[str, object]]) -> None:
         "noise_rad_s",
         "wheel_weight",
         "slip_ratio",
+        "slip_noise_std",
         "position_mode",
         "fusion_mode",
         "gyro_noise",
@@ -279,6 +312,7 @@ def print_summary(summaries: list[dict[str, object]]) -> None:
             format_value(row["configured_imu_gyro_noise_std_rad_s"]),
             format_value(row["configured_wheel_weight"]),
             format_value(row["configured_wheel_slip_ratio"]),
+            format_value(row["configured_wheel_slip_noise_std"]),
             format_value(row["configured_position_mode"]),
             format_value(row["configured_fusion_mode"]),
             format_value(row["configured_gyro_rate_noise_std_rad_s"]),

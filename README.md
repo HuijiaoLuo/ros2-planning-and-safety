@@ -34,8 +34,8 @@ clearance threshold and the speed-dependent stopping envelope. See
 
 ## Current status
 
-The current V2 milestone is frozen as a reproducible planning and safety
-baseline. The repository also contains explicitly separated state-estimation
+The reproducible planning and safety baseline is frozen. The repository also
+contains explicitly separated state-estimation
 and map-localization workstreams; these are not silently presented as validated
 navigation replacements.
 
@@ -51,6 +51,8 @@ The current implementation includes:
 - Python unit tests, C++ tests, and GitHub Actions CI.
 - an offline planner-scaling benchmark for map-size, density, and heuristic sweeps;
 - a read-only ROS2 evaluation logger for closed-loop metrics;
+- a shared launch-configurable goal tolerance and latched terminal stop in the
+  path follower;
 - a heading-estimation diagnostic using `/wheel_odom` and `/imu` while
   navigation remains on the validated `/odom` baseline;
 - an evaluation-only estimator logger reporting wheel and fused-pose RMSE;
@@ -113,7 +115,7 @@ Gazebo differential-drive robot
 The green goal marker is visible in Gazebo but excluded from the LiDAR
 visibility mask, so it is not treated as a physical obstacle.
 
-The V2 baseline uses `/odom` for navigation. The state-estimation workstream
+The baseline uses `/odom` for navigation. The state-estimation workstream
 additionally provides:
 
 ```text
@@ -130,31 +132,47 @@ An optional map-localization experiment adds a known-map position correction:
 
 Passing `navigation_pose_topic:=/state_estimate` switches the planner,
 controller, and safety layer to the estimated pose, but this full estimated-
-pose navigation mode is not part of the validated baseline. The V3 experiments
-show that wheel odometry can trigger false goal completion because its global
-position drifts from `/odom`. The LiDAR localizer is an opt-in experiment and
-is not yet a validated SLAM replacement. It now keeps a stateful `map→odom`
-correction and can broadcast it on TF, but remains diagnostic-only until
-covariance-aware validation is complete. See
+pose navigation mode is not part of the validated baseline. The estimated
+pose can enter the goal tolerance while the physical `/odom` pose is still
+outside it. The LiDAR localizer is an opt-in experiment and is not a
+validated SLAM replacement. It keeps a stateful `map→odom` correction and can
+broadcast it on TF, but remains diagnostic-only while its asynchronous match
+latency and acceptance gates are being validated. See
 [`docs/STATE_ESTIMATION.md`](docs/STATE_ESTIMATION.md),
 [`docs/POSE_EKF.md`](docs/POSE_EKF.md), and
 [`docs/LOCALIZATION.md`](docs/LOCALIZATION.md).
 
-The current heading diagnostic reached the goal with a final error of
-approximately `0.049 m`, zero safety overrides, and no collision while the
-baseline controller remained on `/odom`. The static occupancy grid is now
-published in the `map` frame; in the baseline, `map` and Gazebo odometry are
-numerically aligned, while the optional localizer provides the standard
-`map → odom → base_link` transform.
+The static occupancy grid is published in the `map` frame; in the baseline,
+`map` and Gazebo odometry are numerically aligned, while the optional localizer
+provides the standard `map → odom → base_link` transform.
+
+### Latest estimation evidence
+
+The current calibrated pose-EKF configuration uses a fixed pre-calibrated gyro
+bias, propagated wheel speed, explicit slip uncertainty, wheel-yaw bias, a
+wheel-yaw NIS gate, and covariance logging. In the latest closed-loop trial,
+the estimated pose reached the `0.03 m` tolerance, but the physical pose
+finished `0.069 m` from the goal. The EKF diagnostic reported approximately
+`0.028 m` position RMSE, while the motion audit found a `2.2%` model-to-truth
+forward-distance mismatch. The run also spent `30.1%` of motion time under
+safety override, so this is not yet a validated estimated-pose navigation
+result.
+
+The result is interpreted as a model and integration diagnostic, not as a
+reason to keep tuning isolated weights. The current evidence points to two
+structural issues: systematic wheel-motion scale/slip error and LiDAR-map
+corrections being rejected as `stale_match`. The next experiments therefore
+freeze the calibrated EKF parameters and diagnose timing and acceptance gates
+offline before changing the navigation source.
 
 ### State-estimation and localization status
 
 The estimator compares `/wheel_odom`, pure gyro integration, and
 `/state_estimate` against `/odom` without feeding `/odom` into the estimator.
-An estimator-only navigation check reached the estimated-pose tolerance, but
-the physical `/odom` pose was still approximately `0.160 m` from the goal when
-the experiment timeout ended. This is a documented false-goal-completion case,
-not a successful physical navigation result.
+An estimated-pose navigation check reached its configured tolerance, but the
+physical `/odom` pose remained outside the goal tolerance. Evaluation therefore
+reports estimated-pose completion and physical completion separately; overall
+success requires the physical check.
 
 The LiDAR localizer remains diagnostic-only. No-slip and denser-scan trials
 produced inconsistent candidate corrections. The covariance-aware pose EKF is

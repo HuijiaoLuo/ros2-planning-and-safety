@@ -1,7 +1,8 @@
 # State Estimation
 
-This document describes the transparent wheel/IMU estimator used for the V3
-experiments. It intentionally stops before full pose-EKF navigation. The
+This document describes the transparent wheel/IMU estimator used for the
+diagnostic heading and propagated-position experiments. It intentionally stops
+before full pose-EKF navigation. The
 covariance-aware EKF and the LiDAR-to-map localizer are documented separately
 in [`POSE_EKF.md`](POSE_EKF.md) and [`LOCALIZATION.md`](LOCALIZATION.md).
 
@@ -154,22 +155,22 @@ ideal `/odom` is evaluation-only and is not used in this propagation model.
 
 ## Diagnostic commands
 
-Run a V3 diagnostic while keeping the validated navigation input:
+Run a heading diagnostic while keeping the validated navigation input:
 
 ```bash
 ros2 launch robotics_sim sim.launch.py \
   navigation_pose_topic:=/odom \
   planning_radius_m:=0.41 \
   experiment_timeout_s:=120.0 \
-  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v3_heading_diagnostic.csv \
-  estimation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v3_estimation_metrics.csv
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/heading_diagnostic.csv \
+  estimation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/estimation_metrics.csv
 ```
 
 To summarize estimator experiments:
 
 ```bash
 python tools/summarize_estimation.py \
-  --glob "results/v3_*_metrics.csv" \
+  --glob "results/*_metrics.csv" \
   --output results/estimation_summary.csv
 ```
 

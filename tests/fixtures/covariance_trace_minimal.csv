@@ -1,0 +1,3 @@
+error_x_m,error_y_m,error_heading_rad,position_error_m,estimate_covariance_xx_m2,estimate_covariance_xy_m2,estimate_covariance_yy_m2,estimate_covariance_yaw_rad2,position_normalized_error_sq,heading_normalized_error_sq
+1,0,1,1,1,0,1,1,1,1
+0,1,0,1,1,0,1,1,1,0

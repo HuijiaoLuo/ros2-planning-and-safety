@@ -7,7 +7,12 @@ import unittest
 PACKAGE_ROOT = Path(__file__).parents[1] / "ros2_ws" / "src" / "robotics_nav"
 sys.path.insert(0, str(PACKAGE_ROOT))
 
-from robotics_nav.estimation_metrics import PoseErrorStats, wrap_angle
+from robotics_nav.estimation_metrics import (
+    PoseErrorStats,
+    mahalanobis_squared_2d,
+    normalized_squared_error,
+    wrap_angle,
+)
 
 
 class EstimationMetricTests(unittest.TestCase):
@@ -29,6 +34,17 @@ class EstimationMetricTests(unittest.TestCase):
         summary = PoseErrorStats().summary("wheel")
         self.assertEqual(summary["wheel_samples"], 0)
         self.assertIsNone(summary["wheel_position_rmse_m"])
+
+    def test_normalized_position_error_uses_full_covariance(self) -> None:
+        self.assertAlmostEqual(
+            mahalanobis_squared_2d(1.0, 0.0, 4.0, 0.0, 1.0),
+            0.25,
+        )
+        self.assertIsNone(mahalanobis_squared_2d(1.0, 0.0, 0.0, 0.0, 1.0))
+
+    def test_normalized_scalar_error_rejects_nonpositive_variance(self) -> None:
+        self.assertAlmostEqual(normalized_squared_error(2.0, 4.0), 1.0)
+        self.assertIsNone(normalized_squared_error(2.0, 0.0))
 
 
 if __name__ == "__main__":

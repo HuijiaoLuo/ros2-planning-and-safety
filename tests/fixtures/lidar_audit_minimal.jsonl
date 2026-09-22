@@ -1,0 +1,4 @@
+{"record_type":"config","matcher":{"search_radius_m":0.15,"search_step_m":0.025,"scan_stride":1,"max_match_distance_m":0.3,"prior_weight":0.02,"yaw_search_radius_rad":0.0,"yaw_search_step_rad":0.05,"yaw_prior_weight":0.02,"minimum_points":3,"ignore_outer_boundary":true}}
+{"record_type":"map","width":5,"height":5,"resolution_m":0.5,"origin_x_m":-0.25,"origin_y_m":-1.25,"data":[0,0,100,0,0,0,0,100,0,0,0,0,100,0,0,0,0,100,0,0,0,0,100,0,0]}
+{"record_type":"match_input","match_id":0,"map_pose":[0.2,0.0,0.0],"ranges":[0.75,0.75,0.75],"angle_min":-0.1,"angle_increment":0.1,"range_min":0.1,"range_max":5.0}
+{"record_type":"match_result","match_id":0,"matched_pose":[0.1,0.0,0.0],"score_m":0.0,"point_count":3,"candidate_correction_m":0.1,"correction_x_m":0.0,"correction_y_m":0.0,"quality_valid":true,"match_valid":false,"status":"waiting_for_consecutive_matches","rejection_reasons":["minimum_consecutive_matches"]}

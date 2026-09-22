@@ -21,6 +21,7 @@ def row(
         "configured_imu_gyro_noise_std_rad_s": "0.03",
         "configured_imu_gyro_noise_seed": str(seed),
         "configured_wheel_slip_ratio": str(slip_ratio),
+        "configured_wheel_slip_noise_std": "0.0",
         "configured_wheel_weight": str(wheel_weight),
         "wheel_position_rmse_m": "0.08",
         "estimate_position_rmse_m": "0.081",

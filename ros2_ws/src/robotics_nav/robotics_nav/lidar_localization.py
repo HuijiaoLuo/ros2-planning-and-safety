@@ -90,7 +90,13 @@ class LidarMapMatcher:
         scan_stride: int = 6,
         max_match_distance_m: float = 0.25,
         prior_weight: float = 0.08,
-        yaw_search_radius_rad: float = 0.15,
+        score_mode: str = "range",
+        optimizer_mode: str = "grid",
+        refine_top_k: int = 5,
+        # The production localizer applies x/y corrections only.  Keep the
+        # score geometry consistent with that state update by holding heading
+        # fixed unless a caller explicitly enables yaw diagnostics.
+        yaw_search_radius_rad: float = 0.0,
         yaw_search_step_rad: float = 0.05,
         yaw_prior_weight: float = 0.02,
         minimum_points: int = 6,
@@ -101,6 +107,17 @@ class LidarMapMatcher:
         self.scan_stride = max(1, int(scan_stride))
         self.max_match_distance_m = max(1.0e-3, float(max_match_distance_m))
         self.prior_weight = max(0.0, float(prior_weight))
+        self.score_mode = str(score_mode).strip().lower()
+        if self.score_mode not in {"range", "endpoint", "boundary"}:
+            raise ValueError(
+                "score_mode must be 'range', 'endpoint', or 'boundary'"
+            )
+        self.optimizer_mode = str(optimizer_mode).strip().lower()
+        if self.optimizer_mode not in {"grid", "coarse_to_fine"}:
+            raise ValueError(
+                "optimizer_mode must be 'grid' or 'coarse_to_fine'"
+            )
+        self.refine_top_k = max(1, int(refine_top_k))
         self.yaw_search_radius_rad = max(0.0, float(yaw_search_radius_rad))
         self.yaw_search_step_rad = max(1.0e-3, float(yaw_search_step_rad))
         self.yaw_prior_weight = max(0.0, float(yaw_prior_weight))
@@ -114,10 +131,40 @@ class LidarMapMatcher:
         self.origin_y = 0.0
         self.occupied_centres: list[tuple[float, float]] = []
         self.occupied_cells: set[tuple[int, int]] = set()
+        self.occupied_boundary_segments: list[
+            tuple[float, float, float, float]
+        ] = []
+        self.last_match_diagnostics: dict[str, object] = {}
 
     @property
     def ready(self) -> bool:
         return bool(self.occupied_cells) and self.resolution > 0.0
+
+    def is_free(self, x: float, y: float, clearance_radius_m: float = 0.0) -> bool:
+        """Return whether a candidate robot centre has sufficient map clearance.
+
+        The scan score can be low for a geometrically plausible pose that is
+        nevertheless inside an occupied cell, too close to an occupied cell,
+        or outside the known map.  The optional square-cell clearance check
+        mirrors the planner's conservative obstacle inflation.
+        """
+        if not self.ready:
+            return False
+        column = math.floor((float(x) - self.origin_x) / self.resolution)
+        row = math.floor((float(y) - self.origin_y) / self.resolution)
+        if not (0 <= column < self.width and 0 <= row < self.height):
+            return False
+        radius_cells = math.ceil(
+            max(0.0, float(clearance_radius_m)) / self.resolution
+        )
+        for row_offset in range(-radius_cells, radius_cells + 1):
+            for column_offset in range(-radius_cells, radius_cells + 1):
+                if (
+                    column + column_offset,
+                    row + row_offset,
+                ) in self.occupied_cells:
+                    return False
+        return True
 
     def update_map(
         self,
@@ -145,6 +192,7 @@ class LidarMapMatcher:
         self.origin_y = float(origin_y)
         self.occupied_centres = []
         self.occupied_cells = set()
+        self.occupied_boundary_segments = []
         for row in range(self.height):
             for column in range(self.width):
                 index = row * self.width + column
@@ -162,6 +210,38 @@ class LidarMapMatcher:
                     )
                 )
                 self.occupied_cells.add((column, row))
+
+        # Cache only obstacle/free interfaces.  A measured LiDAR return is a
+        # point on the visible surface, not a point somewhere inside an
+        # occupied raster cell.  These continuous cell-edge segments give the
+        # diagnostic boundary score sub-cell geometric information while
+        # retaining the same static occupancy map as the range model.
+        for column, row in self.occupied_cells:
+            minimum_x = self.origin_x + column * self.resolution
+            maximum_x = minimum_x + self.resolution
+            minimum_y = self.origin_y + row * self.resolution
+            maximum_y = minimum_y + self.resolution
+            neighbours = (
+                (
+                    (column - 1, row),
+                    (minimum_x, minimum_y, minimum_x, maximum_y),
+                ),
+                (
+                    (column + 1, row),
+                    (maximum_x, minimum_y, maximum_x, maximum_y),
+                ),
+                (
+                    (column, row - 1),
+                    (minimum_x, minimum_y, maximum_x, minimum_y),
+                ),
+                (
+                    (column, row + 1),
+                    (minimum_x, maximum_y, maximum_x, maximum_y),
+                ),
+            )
+            for neighbour, segment in neighbours:
+                if neighbour not in self.occupied_cells:
+                    self.occupied_boundary_segments.append(segment)
 
     def _scan_measurements(
         self,
@@ -225,12 +305,16 @@ class LidarMapMatcher:
         measurements: Iterable[tuple[float, float | None]],
         *,
         range_max: float,
+        score_upper_bound: float | None = None,
     ) -> float:
         # Cap each ray residual.  A missed return should influence the score,
         # but one bad ray must not dominate all other geometric evidence.
+        measurement_list = list(measurements)
+        total_measurements = len(measurement_list)
+        if total_measurements == 0:
+            return float("inf")
         total = 0.0
-        count = 0
-        for scan_angle, measured_range in measurements:
+        for scan_angle, measured_range in measurement_list:
             predicted_range = self._raycast_range(
                 x,
                 y,
@@ -251,10 +335,216 @@ class LidarMapMatcher:
                     self.max_match_distance_m,
                 )
             total += residual
-            count += 1
-        if count == 0:
+            # The accumulated residual is a lower bound on the final mean
+            # residual because all remaining ray residuals are non-negative.
+            # If that lower bound already exceeds the best complete candidate
+            # score, this candidate cannot win.  Returning infinity is safe:
+            # the caller only uses the result to reject a provably worse
+            # candidate, so the selected pose and score remain unchanged.
+            if (
+                score_upper_bound is not None
+                and math.isfinite(score_upper_bound)
+                and total > score_upper_bound * total_measurements
+            ):
+                return float("inf")
+        return total / total_measurements
+
+    def _point_to_occupied_distance(self, x: float, y: float) -> float:
+        """Return distance from a point to the nearest occupied cell.
+
+        A LiDAR return is a point on an obstacle boundary, not generally the
+        centre of an occupied grid cell.  Measuring to the cell rectangle
+        avoids adding half a cell of systematic error that a centre-only
+        distance would introduce.
+        """
+        best_distance = float("inf")
+        for column, row in self.occupied_cells:
+            minimum_x = self.origin_x + column * self.resolution
+            maximum_x = minimum_x + self.resolution
+            minimum_y = self.origin_y + row * self.resolution
+            maximum_y = minimum_y + self.resolution
+            distance_x = max(minimum_x - x, 0.0, x - maximum_x)
+            distance_y = max(minimum_y - y, 0.0, y - maximum_y)
+            distance = math.hypot(distance_x, distance_y)
+            best_distance = min(best_distance, distance)
+        return best_distance
+
+    @staticmethod
+    def _point_to_segment_distance(
+        x: float,
+        y: float,
+        start_x: float,
+        start_y: float,
+        end_x: float,
+        end_y: float,
+    ) -> float:
+        """Return Euclidean distance from a point to a line segment."""
+        segment_x = end_x - start_x
+        segment_y = end_y - start_y
+        segment_length_squared = segment_x * segment_x + segment_y * segment_y
+        if segment_length_squared <= 0.0:
+            return math.hypot(x - start_x, y - start_y)
+        projection = (
+            (x - start_x) * segment_x + (y - start_y) * segment_y
+        ) / segment_length_squared
+        projection = min(1.0, max(0.0, projection))
+        closest_x = start_x + projection * segment_x
+        closest_y = start_y + projection * segment_y
+        return math.hypot(x - closest_x, y - closest_y)
+
+    def _point_to_boundary_distance(self, x: float, y: float) -> float:
+        """Return distance to the nearest continuous occupied/free boundary."""
+        best_distance = float("inf")
+        for segment in self.occupied_boundary_segments:
+            distance = self._point_to_segment_distance(x, y, *segment)
+            best_distance = min(best_distance, distance)
+        return best_distance
+
+    def _endpoint_error(
+        self,
+        x: float,
+        y: float,
+        yaw: float,
+        measurements: Iterable[tuple[float, float | None]],
+        *,
+        range_max: float,
+        score_upper_bound: float | None = None,
+    ) -> float:
+        """Score measured endpoints against occupied map-cell boundaries.
+
+        This is an alternative to the baseline ray-range residual.  Valid
+        returns are transformed into map-frame endpoints and compared with
+        the nearest occupied cell rectangle.  No-return rays retain the
+        baseline negative-observation penalty, so the alternative remains
+        compatible with the existing sensor validity handling.
+        """
+        measurement_list = list(measurements)
+        total_measurements = len(measurement_list)
+        if total_measurements == 0:
             return float("inf")
-        return total / count
+        total = 0.0
+        for scan_angle, measured_range in measurement_list:
+            if measured_range is None:
+                predicted_range = self._raycast_range(
+                    x,
+                    y,
+                    float(yaw) + scan_angle,
+                    range_max=range_max,
+                )
+                residual = (
+                    self.max_match_distance_m
+                    if predicted_range is not None
+                    else 0.0
+                )
+            else:
+                world_angle = float(yaw) + scan_angle
+                endpoint_x = x + measured_range * math.cos(world_angle)
+                endpoint_y = y + measured_range * math.sin(world_angle)
+                residual = min(
+                    self._point_to_occupied_distance(endpoint_x, endpoint_y),
+                    self.max_match_distance_m,
+                )
+            total += residual
+            # As with the range score, all remaining residuals are
+            # non-negative, so this is a safe lower-bound early exit.
+            if (
+                score_upper_bound is not None
+                and math.isfinite(score_upper_bound)
+                and total > score_upper_bound * total_measurements
+            ):
+                return float("inf")
+        return total / total_measurements
+
+    def _boundary_error(
+        self,
+        x: float,
+        y: float,
+        yaw: float,
+        measurements: Iterable[tuple[float, float | None]],
+        *,
+        range_max: float,
+        score_upper_bound: float | None = None,
+    ) -> float:
+        """Score valid scan endpoints against continuous map boundaries.
+
+        This model is intentionally diagnostic.  It tests whether the
+        endpoint geometry is informative once raster-cell interiors are
+        removed from the objective.  Invalid returns keep the baseline
+        negative-observation penalty; valid returns use distance to a
+        free/occupied boundary segment.
+        """
+        measurement_list = list(measurements)
+        total_measurements = len(measurement_list)
+        if total_measurements == 0:
+            return float("inf")
+        total = 0.0
+        for scan_angle, measured_range in measurement_list:
+            if measured_range is None:
+                predicted_range = self._raycast_range(
+                    x,
+                    y,
+                    float(yaw) + scan_angle,
+                    range_max=range_max,
+                )
+                residual = (
+                    self.max_match_distance_m
+                    if predicted_range is not None
+                    else 0.0
+                )
+            else:
+                world_angle = float(yaw) + scan_angle
+                endpoint_x = x + measured_range * math.cos(world_angle)
+                endpoint_y = y + measured_range * math.sin(world_angle)
+                residual = min(
+                    self._point_to_boundary_distance(endpoint_x, endpoint_y),
+                    self.max_match_distance_m,
+                )
+            total += residual
+            if (
+                score_upper_bound is not None
+                and math.isfinite(score_upper_bound)
+                and total > score_upper_bound * total_measurements
+            ):
+                return float("inf")
+        return total / total_measurements
+
+    def _measurement_error(
+        self,
+        x: float,
+        y: float,
+        yaw: float,
+        measurements: Iterable[tuple[float, float | None]],
+        *,
+        range_max: float,
+        score_upper_bound: float | None = None,
+    ) -> float:
+        """Dispatch to the configured score model."""
+        if self.score_mode == "endpoint":
+            return self._endpoint_error(
+                x,
+                y,
+                yaw,
+                measurements,
+                range_max=range_max,
+                score_upper_bound=score_upper_bound,
+            )
+        if self.score_mode == "boundary":
+            return self._boundary_error(
+                x,
+                y,
+                yaw,
+                measurements,
+                range_max=range_max,
+                score_upper_bound=score_upper_bound,
+            )
+        return self._range_error(
+            x,
+            y,
+            yaw,
+            measurements,
+            range_max=range_max,
+            score_upper_bound=score_upper_bound,
+        )
 
     def match(
         self,
@@ -319,6 +609,15 @@ class LidarMapMatcher:
             for _, measured_range in measurements
         )
         if not self.ready or valid_points < self.minimum_points:
+            self.last_match_diagnostics = {
+                "optimizer_mode": self.optimizer_mode,
+                "valid_points": valid_points,
+                "evaluated_candidate_count": 0,
+                "finite_candidate_count": 0,
+                "second_best_score_m": None,
+                "score_margin_m": None,
+                "best_on_search_boundary": False,
+            }
             return (
                 float(prior_x),
                 float(prior_y),
@@ -327,7 +626,6 @@ class LidarMapMatcher:
                 valid_points,
             )
 
-        steps = int(math.ceil(self.search_radius_m / self.search_step_m))
         yaw_radius = self.yaw_search_radius_rad
         if yaw_search_radius_rad is not None:
             yaw_radius = max(0.0, float(yaw_search_radius_rad))
@@ -337,26 +635,71 @@ class LidarMapMatcher:
         best_yaw = float(prior_yaw)
         best_score = float("inf")
         best_residual = float("inf")
-        # Search heading locally first, then translation.  The fused wheel/IMU
-        # yaw is the strongest short-term orientation cue, so this is not a
-        # global orientation solve.
-        for yaw_step in range(-yaw_steps, yaw_steps + 1):
-            candidate_yaw = float(prior_yaw) + yaw_step * self.yaw_search_step_rad
+        evaluated_candidate_count = 0
+        finite_candidate_count = 0
+        coarse_candidate_count = 0
+        refinement_candidate_count = 0
+        top_candidates: list[tuple[float, float, float, float, float, float, float, float]] = []
+        ranked_candidates: dict[
+            tuple[float, float, float],
+            tuple[float, float, float, float, float, float, float, float],
+        ] = {}
+
+        def candidate_offsets(
+            centre_x: float,
+            centre_y: float,
+            step: float,
+            radius: float,
+        ) -> list[tuple[float, float]]:
+            """Enumerate a circular x/y grid around one search centre."""
+            steps = int(math.ceil(radius / step))
+            offsets: list[tuple[float, float]] = []
             for x_step in range(-steps, steps + 1):
-                candidate_x = float(prior_x) + x_step * self.search_step_m
                 for y_step in range(-steps, steps + 1):
-                    candidate_y = float(prior_y) + y_step * self.search_step_m
-                    residual = self._range_error(
+                    candidate_x = centre_x + x_step * step
+                    candidate_y = centre_y + y_step * step
+                    # The configured radius is Euclidean, not the half-width
+                    # of the enumerating square.
+                    if math.hypot(
+                        candidate_x - float(prior_x),
+                        candidate_y - float(prior_y),
+                    ) > self.search_radius_m + 1.0e-12:
+                        continue
+                    offsets.append((candidate_x, candidate_y))
+            return offsets
+
+        def evaluate_candidates(
+            candidates: list[tuple[float, float]],
+            *,
+            is_refinement: bool,
+        ) -> None:
+            """Evaluate candidates and retain a small ranked diagnostic set."""
+            nonlocal best_x, best_y, best_yaw, best_score, best_residual
+            nonlocal evaluated_candidate_count, finite_candidate_count
+            nonlocal refinement_candidate_count, coarse_candidate_count
+            for candidate_x, candidate_y in candidates:
+                if is_refinement:
+                    refinement_candidate_count += 1
+                else:
+                    coarse_candidate_count += 1
+                for yaw_step in range(-yaw_steps, yaw_steps + 1):
+                    candidate_yaw = (
+                        float(prior_yaw) + yaw_step * self.yaw_search_step_rad
+                    )
+                    evaluated_candidate_count += 1
+                    dx = candidate_x - float(prior_x)
+                    dy = candidate_y - float(prior_y)
+                    residual = self._measurement_error(
                         candidate_x,
                         candidate_y,
                         candidate_yaw,
                         measurements,
                         range_max=range_max,
+                        score_upper_bound=best_score,
                     )
                     if not math.isfinite(residual):
                         continue
-                    dx = candidate_x - float(prior_x)
-                    dy = candidate_y - float(prior_y)
+                    finite_candidate_count += 1
                     dyaw = wrap_angle(candidate_yaw - float(prior_yaw))
                     # ``residual`` measures scan/map agreement.  The prior
                     # terms regularize weakly observable scenes and keep the
@@ -366,12 +709,129 @@ class LidarMapMatcher:
                         + self.prior_weight * (dx * dx + dy * dy)
                         + self.yaw_prior_weight * (dyaw * dyaw)
                     )
+                    entry = (
+                        score,
+                        residual,
+                        candidate_x,
+                        candidate_y,
+                        wrap_angle(candidate_yaw),
+                        dx,
+                        dy,
+                        dyaw,
+                    )
+                    pose_key = (
+                        round(candidate_x, 9),
+                        round(candidate_y, 9),
+                        round(wrap_angle(candidate_yaw), 9),
+                    )
+                    previous_entry = ranked_candidates.get(pose_key)
+                    if previous_entry is None or score < previous_entry[0]:
+                        ranked_candidates[pose_key] = entry
+                    top_candidates[:] = sorted(
+                        ranked_candidates.values(),
+                        key=lambda ranked_entry: ranked_entry[0],
+                    )[:10]
                     if score < best_score:
                         best_score = score
                         best_residual = residual
                         best_x = candidate_x
                         best_y = candidate_y
                         best_yaw = wrap_angle(candidate_yaw)
+
+        if self.optimizer_mode == "grid":
+            evaluate_candidates(
+                candidate_offsets(
+                    float(prior_x),
+                    float(prior_y),
+                    self.search_step_m,
+                    self.search_radius_m,
+                ),
+                is_refinement=False,
+            )
+        else:
+            # Coarse-to-fine remains deterministic and global at the coarse
+            # level.  Only the best coarse basins are refined, which reduces
+            # repeated ray casts without pretending that the objective is
+            # differentiable.  The default grid mode is unchanged.
+            coarse_step = max(self.search_step_m * 2.0, self.search_step_m)
+            evaluate_candidates(
+                candidate_offsets(
+                    float(prior_x),
+                    float(prior_y),
+                    coarse_step,
+                    self.search_radius_m,
+                ),
+                is_refinement=False,
+            )
+            coarse_winners = [
+                (entry[2], entry[3])
+                for entry in top_candidates[: self.refine_top_k]
+            ]
+            refinement_centres = list(dict.fromkeys(coarse_winners))
+            for centre_x, centre_y in refinement_centres:
+                evaluate_candidates(
+                    candidate_offsets(
+                        centre_x,
+                        centre_y,
+                        self.search_step_m,
+                        coarse_step,
+                    ),
+                    is_refinement=True,
+                )
+
+        second_best_score = (
+            top_candidates[1][0] if len(top_candidates) >= 2 else None
+        )
+        score_margin = (
+            second_best_score - best_score
+            if second_best_score is not None and math.isfinite(best_score)
+            else None
+        )
+        best_distance = math.hypot(
+            best_x - float(prior_x),
+            best_y - float(prior_y),
+        )
+        boundary_tolerance = max(self.search_step_m, 0.5 * self.search_step_m)
+        best_on_search_boundary = (
+            self.search_radius_m > 0.0
+            and best_distance >= self.search_radius_m - boundary_tolerance
+        )
+        self.last_match_diagnostics = {
+            "optimizer_mode": self.optimizer_mode,
+            "valid_points": valid_points,
+            "evaluated_candidate_count": evaluated_candidate_count,
+            "finite_candidate_count": finite_candidate_count,
+            "coarse_candidate_count": coarse_candidate_count,
+            "refinement_candidate_count": refinement_candidate_count,
+            "second_best_score_m": second_best_score,
+            "score_margin_m": score_margin,
+            "best_regularized_score_m": (
+                best_score if math.isfinite(best_score) else None
+            ),
+            "best_residual_m": (
+                best_residual if math.isfinite(best_residual) else None
+            ),
+            "best_prior_penalty_m": (
+                best_score - best_residual
+                if math.isfinite(best_score) and math.isfinite(best_residual)
+                else None
+            ),
+            "best_distance_from_prior_m": best_distance,
+            "best_on_search_boundary": best_on_search_boundary,
+            "top_candidates": [
+                {
+                    "score_m": entry[0],
+                    "residual_m": entry[1],
+                    "x_m": entry[2],
+                    "y_m": entry[3],
+                    "yaw_rad": entry[4],
+                    "dx_m": entry[5],
+                    "dy_m": entry[6],
+                    "dyaw_rad": entry[7],
+                }
+                for entry in top_candidates[:5]
+            ],
+        }
 
         return best_x, best_y, best_yaw, best_residual, valid_points
 
@@ -402,7 +862,7 @@ class LidarMapMatcher:
         if not self.ready or valid_points < self.minimum_points:
             return float("inf"), valid_points
         return (
-            self._range_error(
+            self._measurement_error(
                 float(x),
                 float(y),
                 float(yaw),

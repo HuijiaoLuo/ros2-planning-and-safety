@@ -1,20 +1,22 @@
 # Covariance-aware Pose Estimator
 
-This document describes the first full-pose EKF experiment. It is separate
-from the transparent V3 estimator in [`STATE_ESTIMATION.md`](STATE_ESTIMATION.md)
-and remains diagnostic-only until its covariance and closed-loop behavior are
-validated under controlled uncertainty.
+This document describes the covariance-aware full-pose estimator. It is
+separate from the earlier transparent estimator in
+[`STATE_ESTIMATION.md`](STATE_ESTIMATION.md) and remains diagnostic-only until
+its covariance and closed-loop behavior are validated under controlled
+uncertainty.
 
 ## State and prediction model
 
 The filter state is
 
 $$
-\mathbf{x}_k=(x_k,\,y_k,\,\theta_k,\,b_{g,k})^{\mathsf T}.
+\mathbf{x}_k=(x_k,\,y_k,\,\theta_k,\,b_{g,k},\,b_{w,k})^{\mathsf T}.
 $$
 
-where $b_{g,k}$ is the estimated gyro bias. The IMU supplies angular rate and
-wheel odometry supplies body-forward speed. The bias-corrected rate is
+where $b_{g,k}$ is the estimated gyro bias and $b_{w,k}$ is the estimated
+wheel-yaw bias. The IMU supplies angular rate and wheel odometry supplies
+body-forward speed and wheel yaw. The bias-corrected rate is
 
 Here $b_{g,k}$ is not a value directly measured by the IMU. It is an internal
 EKF state representing the gyro's slowly varying zero-rate offset: if the robot
@@ -39,16 +41,70 @@ The symbols have the following physical meanings:
 | $x_k,y_k$ | estimated robot position in the local planar frame | m | EKF state |
 | $\theta_k$ | estimated robot heading about the vertical axis | rad | EKF state |
 | $b_{g,k}$ | slowly varying gyro zero-rate bias | rad/s | EKF state |
+| $b_{w,k}$ | slowly varying wheel-yaw zero offset | rad | EKF state |
 | $\omega_{z,k}$ | measured vertical-axis angular velocity | rad/s | `/imu.angular_velocity.z` |
 | $v_{x,k}$ | measured forward body velocity | m/s | `/wheel_odom.twist.twist.linear.x` |
-| $s$ | configured fractional wheel-slip loss | dimensionless | launch parameter |
+| $s$ | configured mean fractional wheel-slip loss | dimensionless | launch parameter |
+| $\sigma_s$ | uncertainty of the configured slip fraction | dimensionless | EKF process-noise parameter |
 | $\Delta t_k$ | time between consecutive IMU samples | s | message timestamps |
-| $P_k$ | covariance of $[x,y,\theta,b_g]$ | mixed squared units | EKF uncertainty |
+| $P_k$ | covariance of $[x,y,\theta,b_g,b_w]$ | mixed squared units | EKF uncertainty |
 | $Q_k$ | uncertainty added by one motion step | mixed squared units | configured process noises |
 | $R_{\mathrm{wheel}}$ | variance of one wheel-yaw measurement | rad$^2$ | wheel-yaw noise parameter |
 
 The state is therefore not a perfect pose copied from Gazebo. It is the EKF's
 best current estimate, and $P_k$ describes how uncertain that estimate is.
+The wheel-yaw bias is an internal state, not a second sensor measurement. It
+allows a persistent wheel-yaw offset to be represented separately from white
+wheel-yaw measurement noise. With only gyro rate and wheel yaw, however, a
+constant $b_w$ is not absolutely observable: an offset in the initial heading
+can produce the same wheel-yaw sequence. Therefore this state is first a
+bias-aware uncertainty model; identifying its physical value requires an
+external absolute heading or map constraint.
+
+## Gyro-bias operating mode
+
+The symbol $b_{g,k}$ has two possible roles, selected by the launch parameter
+`gyro_bias_mode`:
+
+- `gyro_bias_mode:=estimated`: $b_{g,k}$ is an EKF state. The filter gives it a
+  random-walk process model and may update it through the wheel-yaw innovation
+  when the covariance contains a correlation between gyro bias and heading.
+- `gyro_bias_mode:=fixed`: $b_{g,k}$ is a pre-calibrated constant. Its value is
+  `initial_gyro_bias_rad_s`; the wheel-yaw update cannot change it, and its
+  covariance row and column are kept zero.
+
+In both modes, $b_{g,k}$ is not the raw IMU measurement. It is either an
+estimated or pre-calibrated model parameter representing the IMU's zero-rate
+offset. The raw measurement is $\omega_{z,k}$, and the motion model uses
+
+$$
+\omega_k = \omega_{z,k} - b_{g,k}.
+$$
+
+In estimated mode, the mean bias is normally propagated as constant between
+updates:
+
+$$
+b_{g,k}^{-}=b_{g,k-1}+w_{b,k},
+$$
+
+where $w_{b,k}$ has zero mean and its variance is represented in $Q_k$. The
+measurement update may then change the estimate. In fixed mode, the equivalent
+mean model is simply
+
+$$
+b_{g,k}^{-}=b_{g,k}=b_{g,0},
+\qquad
+b_{g,0}=\texttt{initial\_gyro\_bias\_rad\_s}.
+$$
+
+This distinction is important for diagnosis. With only gyro rate and wheel
+yaw, a persistent wheel-yaw modelling error can be absorbed by an estimated
+$b_g$. The fixed mode removes that degree of freedom and asks the experiment
+to evaluate wheel-yaw fusion with the gyro calibration held constant. The
+simulation parameter `imu_gyro_bias_rad_s` is separate: it injects a bias into
+the simulated IMU, while `initial_gyro_bias_rad_s` supplies the estimator's
+initial calibration value.
 
 The translational increment uses the configured wheel-slip ratio $s$:
 
@@ -100,15 +156,17 @@ $$
 P_k^-=F_kP_{k-1}F_k^{\mathsf T}+Q_k.
 $$
 
-$Q_k$ contains configured gyro-rate noise, wheel-speed noise, and gyro-bias
-random-walk noise. The slip ratio is configured in this first experiment; it
-is not estimated as an additional state.
+$Q_k$ contains configured gyro-rate noise, wheel-speed noise, gyro-bias
+random-walk noise, wheel-yaw-bias random-walk noise, and optional slip
+uncertainty. The mean slip ratio is configured; it is not estimated as an
+additional state.
 
 The EKF therefore maintains both a state vector and a confidence description.
 The state says where the robot is estimated to be. The covariance $P$ says how
 uncertain that estimate is and which errors are correlated. Its diagonal terms
-have units $\mathrm{m}^2$, $\mathrm{m}^2$, $\mathrm{rad}^2$, and
-$(\mathrm{rad/s})^2$ for position, position, heading, and gyro bias.
+have units $\mathrm{m}^2$, $\mathrm{m}^2$, $\mathrm{rad}^2$,
+$(\mathrm{rad/s})^2$, and $\mathrm{rad}^2$ for position, position, heading,
+gyro bias, and wheel-yaw bias.
 
 ## How the EKF is calculated
 
@@ -154,14 +212,15 @@ The superscript $-$ means “before using the new wheel-yaw measurement”.
 
 ### 3. Predict the covariance
 
-The covariance $P$ describes uncertainty in $x$, $y$, yaw, and gyro bias. The
+The covariance $P$ describes uncertainty in $x$, $y$, yaw, gyro bias, and
+wheel-yaw bias. The
 EKF linearizes the motion model around the current estimate. In this
 implementation the state-transition Jacobian is approximately
 
 The non-zero entries used by the implementation are
 
 $$
-F_{11}=1,\quad F_{22}=1,\quad F_{33}=1,\quad F_{44}=1,
+F_{11}=1,\quad F_{22}=1,\quad F_{33}=1,\quad F_{44}=1,\quad F_{55}=1,
 $$
 
 $$
@@ -170,7 +229,7 @@ F_{23}=\Delta s_k\cos(\theta_{\mathrm{mid},k}),
 $$
 
 $$
-F_{14}=-\frac{1}{2}\Delta s_k\Delta t_k
+F_{14}=\frac{1}{2}\Delta s_k\Delta t_k
 \sin(\theta_{\mathrm{mid},k}),\quad
 F_{24}=-\frac{1}{2}\Delta s_k\Delta t_k
 \cos(\theta_{\mathrm{mid},k}),\quad
@@ -182,7 +241,9 @@ sensitivity of state component $i$ to a small change in state component $j$.
 
 The first two rows show how heading uncertainty bends the predicted position.
 The fourth column shows how gyro-bias uncertainty accumulates into heading and
-then into position. The covariance prediction is
+then into position. The wheel-yaw-bias state does not affect motion
+prediction directly; it follows a random walk and enters the measurement
+model below. The covariance prediction is
 
 $$
 P_k^-=F_kP_{k-1}F_k^{\mathsf T}+Q_k.
@@ -190,33 +251,49 @@ $$
 
 The superscript $-$ means the predicted, pre-measurement quantity. Without the
 superscript, $P_k$ denotes the posterior covariance after the wheel-yaw update.
-The four diagonal entries of $P_k$ have units $\mathrm{m}^2$,
-$\mathrm{m}^2$, $\mathrm{rad}^2$, and $(\mathrm{rad/s})^2$, respectively.
+The five diagonal entries of $P_k$ have units $\mathrm{m}^2$,
+$\mathrm{m}^2$, $\mathrm{rad}^2$, $(\mathrm{rad/s})^2$, and $\mathrm{rad}^2$,
+respectively.
 Off-diagonal entries describe correlations, for example how heading error can
 become position error while the robot moves.
 
-The process covariance $Q_k$ is assembled from three configured sources:
+The process covariance $Q_k$ is assembled from five configured sources:
 
 - gyro-rate noise, mapped through the sensitivity of position and yaw to
   angular-rate error;
 - wheel-speed noise, mapped through the sensitivity of position to forward
   speed error;
-- gyro-bias random walk, added to the bias variance over the time interval.
+- gyro-bias random walk, added to the bias variance over the time interval;
+- wheel-yaw-bias random walk, added to the wheel-yaw-bias variance over the
+  time interval;
+- uncertainty in the configured wheel-slip fraction, mapped into x/y travel.
 
-More explicitly, the implementation forms two sensitivity vectors:
+More explicitly, the implementation forms three motion-noise sensitivity
+vectors:
 
 $$
 G_{\omega,k}=\left(
 -\frac{1}{2}\Delta s_k\Delta t_k\sin(\theta_{\mathrm{mid},k}),\,
 \frac{1}{2}\Delta s_k\Delta t_k\cos(\theta_{\mathrm{mid},k}),\,
-\Delta t_k,\,0
+\Delta t_k,\,0,\,0
 \right)^{\mathsf T},
 $$
 
 $$
 G_{v,k}=\left(
 (1-s)\Delta t_k\cos(\theta_{\mathrm{mid},k}),\,
-(1-s)\Delta t_k\sin(\theta_{\mathrm{mid},k}),\,0,\,0
+(1-s)\Delta t_k\sin(\theta_{\mathrm{mid},k}),\,0,\,0,\,0
+\right)^{\mathsf T}.
+$$
+
+The configured slip ratio is a mean model, not a perfectly known constant. If
+the actual slip differs from $s$ by a small random amount, the position is
+sensitive to that amount through
+
+$$
+G_{s,k}=\left(
+-v_{x,k}\Delta t_k\cos(\theta_{\mathrm{mid},k}),\,
+-v_{x,k}\Delta t_k\sin(\theta_{\mathrm{mid},k}),\,0,\,0,\,0
 \right)^{\mathsf T}.
 $$
 
@@ -225,17 +302,29 @@ The process covariance is then calculated as
 $$
 Q_k=\sigma_{\omega}^{2}G_{\omega,k}G_{\omega,k}^{\mathsf T}
 +\sigma_{v}^{2}G_{v,k}G_{v,k}^{\mathsf T}
-+q_b\Delta t_k\,e_4e_4^{\mathsf T},
++\sigma_{s}^{2}G_{s,k}G_{s,k}^{\mathsf T}
++q_b\Delta t_k\,e_4e_4^{\mathsf T}
++q_w\Delta t_k\,e_5e_5^{\mathsf T},
 $$
 
-where $e_4=(0,0,0,1)^{\mathsf T}$ selects the gyro-bias state.
+where $e_4=(0,0,0,1,0)^{\mathsf T}$ selects the gyro-bias state and
+$e_5=(0,0,0,0,1)^{\mathsf T}$ selects the wheel-yaw-bias state. The
+parameter `wheel_yaw_bias_random_walk_std_rad_sqrt_s` is the square root of
+$q_w$, the wheel-yaw-bias random-walk variance per second.
 
 Here $\sigma_{\omega}$ is `gyro_rate_noise_std_rad_s`, $\sigma_v$ is
-`wheel_speed_noise_std_m_s`, and $q_b$ is the configured gyro-bias
-random-walk variance. The vector outer products distribute sensor noise into
-the states that it physically affects instead of adding the same scalar noise
-to every state. In the implementation, the configured standard deviations are
-squared before entering these covariance terms.
+`wheel_speed_noise_std_m_s`, $\sigma_s$ is `wheel_slip_noise_std`, and $q_b$
+is the configured gyro-bias random-walk variance. The vector outer products
+distribute each uncertainty into the states that it physically affects instead
+of adding the same scalar noise to every state. In the implementation, the
+configured standard deviations are squared before entering these covariance
+terms.
+
+`wheel_slip_noise_std` is not a second slip estimate and is not a direct
+measurement of tire slip. It is the standard deviation of the unknown
+deviation around the configured mean $s$. Setting it to zero reproduces the
+earlier propagated model; increasing it makes the filter report larger x/y uncertainty
+during motion when the assumed slip model may be wrong.
 
 Thus uncertainty grows during motion even when no wheel-yaw update is
 available. The initial variances are explicit parameters in the Python class;
@@ -244,16 +333,25 @@ run can report a relatively large x/y covariance.
 
 ### 4. Compare wheel yaw with the prediction
 
-Wheel yaw measures only the third state component, so the measurement matrix is
+Wheel yaw measures physical heading plus the wheel-yaw bias, so the measurement
+matrix is
 
 $$
-H=(0,0,1,0).
+H=(0,0,1,0,1).
 $$
 
-The wrapped difference between measurement and predicted yaw is
+The predicted wheel-yaw measurement is
 
 $$
-\nu_k=\mathrm{wrap}(\theta_k^{\mathrm{wheel}}-\theta_k^-).
+\widehat{\theta}_{k}^{\mathrm{wheel},-}=\theta_k^-+b_{w,k}^-.
+$$
+
+The wrapped difference between measurement and predicted wheel yaw is
+
+$$
+\nu_k=\mathrm{wrap}\left(
+\theta_k^{\mathrm{wheel}}-\theta_k^- - b_{w,k}^-
+\right).
 $$
 
 The innovation variance combines predicted yaw uncertainty and wheel-yaw
@@ -273,17 +371,17 @@ Thus $S_k$ is the predicted variance of the yaw disagreement. It contains two
 parts: uncertainty already present in the predicted heading, plus uncertainty
 in the wheel-yaw sensor itself. It is measured in rad$^2$.
 
-The Kalman gain is a four-component vector:
+The Kalman gain is a five-component vector:
 
 $$
 K_k=P_k^-H^{\mathsf T}S_k^{-1}.
 $$
 
 The gain is dimensionless for the heading component. Its other components have
-the units needed to map a yaw residual into a correction of position or gyro
-bias. A larger predicted uncertainty in a state generally allows a larger
-correction; a larger $R_{\mathrm{wheel}}$ makes the filter trust wheel yaw
-less.
+the units needed to map a yaw residual into a correction of position, gyro
+bias, or wheel-yaw bias. A larger predicted uncertainty in a state generally
+allows a larger correction; a larger $R_{\mathrm{wheel}}$ makes the filter
+trust wheel yaw less.
 
 Although the wheel measurement is only yaw, the gain can also contain x, y,
 and bias components because the covariance contains cross-correlations. The
@@ -294,10 +392,12 @@ $$
 $$
 
 In plain language: a large predicted yaw uncertainty increases the correction
-toward wheel yaw; a large wheel-yaw noise variance decreases it. The update is
-not averaging x/y from two independent position sensors. Wheel forward speed
-drives position prediction, and wheel yaw corrects heading and any correlated
-state uncertainty.
+toward wheel yaw; a large wheel-yaw noise variance decreases it. A persistent
+wheel offset can be represented by $b_w$, whose estimate changes slowly
+according to its random-walk model, but the current sensor set cannot uniquely
+separate that offset from the initial heading. The update is not averaging x/y
+from two independent position sensors. Wheel forward speed drives position
+prediction, and wheel yaw corrects the coupled heading/bias uncertainty.
 
 ### 5. Check the measurement with NIS
 
@@ -325,13 +425,14 @@ non-negative diagonal values under repeated floating-point updates.
 
 ## Wheel-yaw measurement and NIS gate
 
-Wheel yaw is used as a scalar heading measurement. The wrapped innovation is
+Wheel yaw is used as a scalar heading-plus-bias measurement. The wrapped
+innovation is
 
 $$
-\nu_k=\mathrm{wrap}\left(\theta_k^{\mathrm{wheel}}-\theta_k^-\right).
+\nu_k=\mathrm{wrap}\left(\theta_k^{\mathrm{wheel}}-\theta_k^- - b_{w,k}^-\right).
 $$
 
-With measurement matrix $H=[0\;0\;1\;0]$, the innovation variance and gain are
+With measurement matrix $H=[0\;0\;1\;0\;1]$, the innovation variance and gain are
 
 $$
 S_k=HP_k^-H^{\mathsf T}+R_{\mathrm{wheel}},
@@ -373,8 +474,11 @@ existing `/state_estimate` topic. It also publishes:
 
 The estimator consumes only `/wheel_odom` and `/imu/angular_velocity.z`.
 Gazebo `/odom` is evaluation-only. The estimation logger records NIS, rejected
-measurement episodes, covariance means/final values, and the usual RMSE and
-bias metrics.
+measurement episodes, covariance means/final values, the final wheel-yaw-bias
+estimate, and the usual RMSE and bias metrics. The main new EKF parameters are
+`initial_position_variance_m2`,
+`initial_wheel_yaw_bias_variance_rad2`, and
+`wheel_yaw_bias_random_walk_std_rad_sqrt_s`.
 
 ## First smoke result
 
@@ -400,6 +504,46 @@ already calibrated. The EKF heading RMSE was not lower than the wheel-yaw
 reference in this row, so the filter should not yet be advertised as an
 accuracy improvement.
 
+## Covariance calibration trace
+
+The one-row metrics file cannot show whether the reported covariance is
+consistent with the physical error at each instant. For that diagnostic, the
+logger has an optional evaluation-only trace:
+
+```bash
+ros2 launch robotics_sim sim.launch.py \
+  navigation_pose_topic:=/odom \
+  fusion_mode:=ekf \
+  position_mode:=propagated \
+  planning_radius_m:=0.41 \
+  experiment_timeout_s:=120.0 \
+  estimation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v4_ekf_covariance_metrics.csv \
+  estimation_trace_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v4_ekf_covariance_trace.csv
+```
+
+Each trace row contains the `/odom` evaluation error, the EKF x/y/yaw
+covariance, the joint position normalized squared error, and the scalar
+heading normalized squared error. The trace is written by the logger only;
+`/odom` is never subscribed to by the estimator, planner, follower, or safety
+supervisor.
+
+Summarize one or more traces with:
+
+```bash
+python tools/summarize_covariance_calibration.py \
+  --glob "results/v4_ekf_*_trace.csv" \
+  --output results/v4_ekf_covariance_calibration.csv
+```
+
+For a reasonably calibrated Gaussian covariance, the mean joint position
+normalized error should be near `2`, the mean heading value near `1`, and the
+95-percent coverage should be near `0.95`. The reported position and heading
+coverage use the 2-D and 1-D chi-square thresholds `5.991` and `3.841`.
+Trajectory samples are correlated, so these are calibration diagnostics and
+not independent confidence guarantees. The current smoke covariance is known
+to be broad in x/y; this trace is the required evidence before using a
+Mahalanobis gate for LiDAR corrections or claiming a calibrated EKF.
+
 ## Reproducible smoke test
 
 ```bash
@@ -408,6 +552,7 @@ ros2 launch robotics_sim sim.launch.py \
   fusion_mode:=ekf \
   position_mode:=propagated \
   wheel_slip_ratio:=0.0 \
+  wheel_slip_noise_std:=0.0 \
   imu_gyro_bias_rad_s:=0.0 \
   imu_gyro_noise_std_rad_s:=0.0 \
   wheel_speed_noise_std_m_s:=0.02 \
@@ -418,7 +563,8 @@ ros2 launch robotics_sim sim.launch.py \
   estimation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v4_ekf_smoke_metrics.csv
 ```
 
-The next controlled comparisons are zero-slip versus
-`wheel_slip_ratio:=0.10`, followed by seeded gyro bias and gyro white noise.
-Only after those results are understood should
+The next controlled comparison keeps the mean slip at
+`wheel_slip_ratio:=0.10` and adds `wheel_slip_noise_std:=0.02` to test whether
+the reported position covariance responds to model uncertainty. Only after
+those results are understood should
 `navigation_pose_topic:=/state_estimate` be tested in closed loop.

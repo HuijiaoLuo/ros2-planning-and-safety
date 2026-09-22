@@ -198,6 +198,82 @@ class HeadingFusionTests(unittest.TestCase):
         self.assertGreater(ekf.last_gain, 0.0)
         self.assertLess(ekf.covariance[2][2], initial_variance)
 
+    def test_pose_ekf_tracks_wheel_yaw_bias_as_a_state(self) -> None:
+        ekf = PoseEKF(
+            gyro_rate_noise_std_rad_s=0.0,
+            wheel_speed_noise_std_m_s=0.0,
+            wheel_yaw_noise_std_rad=0.02,
+            initial_wheel_yaw_bias_variance_rad2=0.04,
+            wheel_yaw_bias_random_walk_std_rad_sqrt_s=0.02,
+        )
+        ekf.update_wheel(0.0)
+        ekf.update_gyro(0.0, 0.0)
+        ekf.update_gyro(0.0, 1.0)
+        for _ in range(10):
+            ekf.update_wheel(0.2)
+
+        self.assertEqual(len(ekf.state), 5)
+        self.assertNotEqual(ekf.wheel_yaw_bias_estimate, 0.0)
+        self.assertGreaterEqual(ekf.covariance[4][4], 0.0)
+
+    def test_pose_ekf_fixed_gyro_bias_is_not_changed_by_wheel_yaw(self) -> None:
+        ekf = PoseEKF(
+            gyro_bias_mode="fixed",
+            initial_gyro_bias_rad_s=0.01,
+            gyro_rate_noise_std_rad_s=0.0,
+            wheel_speed_noise_std_m_s=0.0,
+            wheel_yaw_noise_std_rad=0.02,
+        )
+        ekf.update_wheel(0.0)
+        ekf.update_gyro(0.4, 0.0)
+        ekf.update_gyro(0.4, 1.0)
+        ekf.update_wheel(0.0)
+
+        self.assertAlmostEqual(ekf.bias_estimate, 0.01, places=12)
+        self.assertTrue(all(abs(row[3]) <= 1.1e-12 for row in ekf.covariance))
+        self.assertTrue(
+            all(abs(ekf.covariance[3][column]) <= 1.1e-12 for column in range(5))
+        )
+
+    def test_pose_ekf_slip_uncertainty_increases_position_covariance(self) -> None:
+        certain_slip = PoseEKF(
+            gyro_rate_noise_std_rad_s=0.0,
+            wheel_speed_noise_std_m_s=0.0,
+            wheel_slip_ratio=0.10,
+            wheel_slip_noise_std=0.0,
+        )
+        uncertain_slip = PoseEKF(
+            gyro_rate_noise_std_rad_s=0.0,
+            wheel_speed_noise_std_m_s=0.0,
+            wheel_slip_ratio=0.10,
+            wheel_slip_noise_std=0.10,
+        )
+        for ekf in (certain_slip, uncertain_slip):
+            ekf.update_wheel(math.pi / 4.0, linear_velocity_x=1.0)
+            ekf.update_gyro(0.0, 0.0)
+            ekf.update_gyro(0.0, 1.0)
+
+        self.assertGreater(
+            uncertain_slip.covariance[0][0], certain_slip.covariance[0][0]
+        )
+        self.assertGreater(
+            uncertain_slip.covariance[1][1], certain_slip.covariance[1][1]
+        )
+
+    def test_pose_ekf_bias_position_jacobian_has_correct_x_sign(self) -> None:
+        ekf = PoseEKF(
+            gyro_rate_noise_std_rad_s=0.0,
+            wheel_speed_noise_std_m_s=0.0,
+            gyro_bias_random_walk_std_rad_s2=0.0,
+        )
+        ekf.update_wheel(math.pi / 4.0, linear_velocity_x=1.0)
+        ekf.update_gyro(0.0, 0.0)
+        ekf.update_gyro(0.0, 1.0)
+
+        # Increasing gyro bias decreases the midpoint heading.  At a positive
+        # heading this makes x increase, so the x/bias covariance is positive.
+        self.assertGreater(ekf.covariance[0][3], 0.0)
+
     def test_pose_ekf_rejects_large_yaw_innovation_with_nis_gate(self) -> None:
         ekf = PoseEKF(nis_gate_threshold=9.0)
         ekf.update_wheel(0.0)

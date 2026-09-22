@@ -10,6 +10,49 @@ def wrap_angle(angle: float) -> float:
     return math.atan2(math.sin(angle), math.cos(angle))
 
 
+def mahalanobis_squared_2d(
+    error_x: float,
+    error_y: float,
+    covariance_xx: float,
+    covariance_xy: float,
+    covariance_yy: float,
+) -> float | None:
+    """Return the squared 2-D normalized error, or ``None`` if invalid.
+
+    The covariance entries describe the same world-frame x/y coordinates as
+    the error.  This is used for offline calibration only: a value near 2 is
+    the expected mean for a well-calibrated two-dimensional Gaussian, and the
+    95-percent chi-square threshold is approximately 5.991.
+    """
+    determinant = covariance_xx * covariance_yy - covariance_xy * covariance_xy
+    if not all(
+        math.isfinite(value)
+        for value in (
+            error_x,
+            error_y,
+            covariance_xx,
+            covariance_xy,
+            covariance_yy,
+        )
+    ) or determinant <= 0.0:
+        return None
+    numerator = (
+        covariance_yy * error_x * error_x
+        - 2.0 * covariance_xy * error_x * error_y
+        + covariance_xx * error_y * error_y
+    )
+    value = numerator / determinant
+    return value if value >= 0.0 and math.isfinite(value) else None
+
+
+def normalized_squared_error(error: float, variance: float) -> float | None:
+    """Return ``error**2 / variance`` when the variance is physically valid."""
+    if not math.isfinite(error) or not math.isfinite(variance) or variance <= 0.0:
+        return None
+    value = error * error / variance
+    return value if math.isfinite(value) else None
+
+
 class PoseErrorStats:
     """Accumulate position and heading errors without storing every sample."""
 
