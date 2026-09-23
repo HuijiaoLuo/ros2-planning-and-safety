@@ -225,8 +225,7 @@ the MCL candidate, both computed from the same temporal scan window. The
 diagnostic evidence gain is
 
 $$
-\Delta \ell_k
-= \ell_{\mathrm{candidate},k}-\ell_{\mathrm{prior},k}.
+\Delta \ell_k = \ell_{\mathrm{candidate},k}-\ell_{\mathrm{prior},k}.
 $$
 
 A positive value means that the candidate explains the current LiDAR window
@@ -244,11 +243,7 @@ far outside the uncertainty of the continuously propagated state. The adapter
 therefore records a covariance-weighted displacement diagnostic. Let
 
 $$
-\delta p_k
-=\left(
-x_k^{\mathrm{candidate}}-x_k^{\mathrm{source}},
-y_k^{\mathrm{candidate}}-y_k^{\mathrm{source}}
-\right)^{\mathsf T}
+\delta p_k = \left(x_k^{\mathrm{candidate}}-x_k^{\mathrm{source}}, y_k^{\mathrm{candidate}}-y_k^{\mathrm{source}}\right)^{\mathsf T}
 $$
 
 and let the approximate displacement covariance be
@@ -261,8 +256,7 @@ $$
 The diagnostic Mahalanobis distance is
 
 $$
-d_k^2 = \delta p_k^{\mathsf T}
-P_{\Delta,k}^{-1}\delta p_k.
+d_k^2 = \delta p_k^{\mathsf T}P_{\Delta,k}^{-1}\delta p_k.
 $$
 
 Combining this prior-consistency term with the LiDAR evidence gives the
@@ -285,9 +279,7 @@ compact map alias.
 The adapter now enforces the weaker but necessary condition
 
 $$
-
 \Delta \ell_k > 0
-
 $$
 
 before applying a candidate. A candidate with zero or negative gain receives
@@ -301,9 +293,7 @@ The correction path also requires the model-based posterior comparison to be
 positive:
 
 $$
-\Delta \ell_k > 0
-\quad\land\quad
-\Delta \log p_k > 0.
+\Delta \ell_k > 0 \quad\land\quad \Delta \log p_k > 0.
 $$
 
 When the LiDAR gain is positive but the Bayesian gain is non-positive, the

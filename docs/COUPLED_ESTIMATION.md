@@ -100,7 +100,7 @@ unchanged.
 The current coupling is deliberately conservative:
 
 - only accepted known-map MCL events are consumed;
-- only $(x,y)$ is measured, so a map alias cannot directly overwrite yaw;
+- only $\left(x,y\right)$ is measured, so a map alias cannot directly overwrite yaw;
 - the MCL prior-vs-candidate evidence gate remains active;
 - the EKF NIS gate provides a second consistency check;
 - the map and odometry frames are assumed aligned in this experiment;

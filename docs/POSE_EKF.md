@@ -539,7 +539,7 @@ python tools/summarize_covariance_calibration.py \
 ```
 
 The reported position value is the **raw joint NEES** for the two-dimensional
-$(x,y)$ error; it is not divided by its two degrees of freedom. For a
+$\left(x,y\right)$ error; it is not divided by its two degrees of freedom. For a
 reasonably calibrated Gaussian covariance, its mean should therefore be near
 `2`. The scalar heading NEES has one degree of freedom, so its mean should be
 near `1`. The reported position and heading coverage use the 2-D and 1-D

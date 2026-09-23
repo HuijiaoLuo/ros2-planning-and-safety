@@ -50,13 +50,10 @@ production configuration holds the fused wheel/IMU heading fixed because the
 localizer applies translation only. Its score is
 
 $$
-J(x,y,\theta)=
-\frac{1}{N}\sum_{i=1}^{N}e_i(x,y,\theta)
-+\lambda\left((x-\hat{x}_{\mathrm{odom}})^2
-+(y-\hat{y}_{\mathrm{odom}})^2\right).
+J(x,y,\theta)=\frac{1}{N}\sum_{i=1}^{N}e_i(x,y,\theta)+\lambda\left((x-\hat{x}_{\mathrm{odom}})^2+(y-\hat{y}_{\mathrm{odom}})^2\right).
 $$
 
-The corrected position $(\hat{x}_{k},\hat{y}_{k})$ is the nearby candidate
+The corrected position $\left(\hat{x}_{k},\hat{y}_{k}\right)$ is the nearby candidate
 with the smallest score $J$. Only position is corrected; the heading remains
 the fused wheel/IMU heading.
 
@@ -81,9 +78,7 @@ be the closest point on that segment, and let $n_{j(i)}$ be the segment normal.
 The residual is
 
 $$
-e_i^{\mathrm{line}}=
-\left|n_{j(i)}^{\mathsf T}(p_i-q_i)\right|
-+\frac{1}{2}\left\|p_i-q_i\right\|_2.
+e_i^{\mathrm{line}}=\left|n_{j(i)}^{\mathsf T}(p_i-q_i)\right|+\frac{1}{2}\left\|p_i-q_i\right\|_2.
 $$
 
 This is an ICP-style point-to-line correspondence score evaluated inside the
@@ -115,9 +110,7 @@ The node maintains a planar `map → odom` correction. If the input pose is
 $p_{\mathrm{odom}}$, the published pose is
 
 $$
-p_{\mathrm{map}}=
-T_{\mathrm{map}\leftarrow\mathrm{odom}}
-\oplus p_{\mathrm{odom}}.
+p_{\mathrm{map}}=T_{\mathrm{map}\leftarrow\mathrm{odom}}\oplus p_{\mathrm{odom}}.
 $$
 
 An accepted candidate is treated as an occasional external position

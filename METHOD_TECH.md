@@ -381,7 +381,7 @@ $$
 p_{i,y}^{\mathrm{map}} = y + r_i\sin(\theta + \alpha_i)
 $$
 
-The local matcher searches candidate $(x,y)$ values near the odometry pose
+The local matcher searches candidate $\left(x,y\right)$ values near the odometry pose
 while holding the fused wheel/IMU heading fixed. For a candidate position and
 heading, the position score is
 
@@ -444,7 +444,7 @@ J = e_{\mathrm{scan}} + w_{\mathrm{prior}}\left(\Delta x^2 + \Delta y^2\right) +
 $$
 
 where $e_{\mathrm{scan}}$ is the mean LiDAR/map residual, and
-$(\Delta x, \Delta y, \Delta\theta)$ is the candidate displacement relative
+$\left(\Delta x, \Delta y, \Delta\theta\right)$ is the candidate displacement relative
 to the input pose. The final two terms are regularizers, not additional sensor
 measurements. The audit records both $J$ and $e_{\mathrm{scan}}$, allowing the
 prior penalty to be inspected before changing its weight.
