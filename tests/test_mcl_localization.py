@@ -3,6 +3,7 @@ import unittest
 
 from robotics_nav.mcl_localization import (
     MCLConfig,
+    MCLScanObservation,
     OccupancyGridMap,
     Particle,
     ParticleFilter2D,
@@ -100,6 +101,41 @@ class MCLLocalizationTests(unittest.TestCase):
         estimate = particle_filter.estimate()
         self.assertLess(abs(abs(estimate.pose[2]) - math.pi), 0.02)
         self.assertAlmostEqual(0.0, wrap_angle(estimate.pose[2] - math.pi), places=2)
+
+    def test_temporal_observation_inverts_scan_to_current_motion(self) -> None:
+        observation = MCLScanObservation(
+            ranges_m=(1.0,),
+            angle_min_rad=0.0,
+            angle_increment_rad=0.0,
+            range_min_m=0.05,
+            range_max_m=10.0,
+            relative_x_m=1.0,
+            relative_y_m=0.0,
+            relative_yaw_rad=math.pi / 2.0,
+        )
+        historical_pose = ParticleFilter2D.scan_pose_from_current_particle(
+            (3.0, 2.0, math.pi / 2.0), observation
+        )
+        self.assertAlmostEqual(2.0, historical_pose[0], places=8)
+        self.assertAlmostEqual(2.0, historical_pose[1], places=8)
+        self.assertAlmostEqual(0.0, historical_pose[2], places=8)
+
+    def test_temporal_window_accumulates_independent_log_evidence(self) -> None:
+        observation = MCLScanObservation(
+            ranges_m=(),
+            angle_min_rad=0.0,
+            angle_increment_rad=0.0,
+            range_min_m=0.05,
+            range_max_m=10.0,
+        )
+        particle_filter = self.make_filter()
+        single_score, _ = particle_filter.pose_log_likelihood_sequence(
+            (2.5, 2.5, 0.0), [observation]
+        )
+        double_score, _ = particle_filter.pose_log_likelihood_sequence(
+            (2.5, 2.5, 0.0), [observation, observation]
+        )
+        self.assertAlmostEqual(2.0 * single_score, double_score, places=12)
 
     def test_update_reports_multimodal_spread_instead_of_false_certainty(self) -> None:
         particle_filter = self.make_filter(count=20)

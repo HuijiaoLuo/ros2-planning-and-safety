@@ -18,6 +18,13 @@ The localizer assumes a known static occupancy map, a planar odometry estimate
 close to the true pose, and a sufficiently observable local scene. It does not
 consume Gazebo ground-truth `/odom`.
 
+The repository also contains an independent `localization_backend:=icp`
+baseline. It keeps the same input/output topic contract but replaces the
+ray-casting/grid objective with deterministic point-to-point registration. Its
+model and limitations are documented in
+[`ICP_LOCALIZATION.md`](ICP_LOCALIZATION.md). The ICP backend is a controlled
+model comparison, not a claim that the current system provides SLAM.
+
 ## Local scan-to-map objective
 
 For each valid LiDAR return, the localizer raycasts the map and predicts the
@@ -174,7 +181,7 @@ $$
 positive value requires a valid EKF x/y covariance and rejects candidates with
 larger normalized displacement using the status
 `candidate_uncertainty_too_large`. This connects the external correction to
-the uncertainty already estimated by V4 without adding the LiDAR residual to
+the uncertainty already estimated by the pose EKF without adding the LiDAR residual to
 the EKF state update.
 
 The node publishes the applied correction, signed candidate displacement
@@ -288,12 +295,17 @@ repeated, ambiguous, or otherwise rejected match resets this confirmation.
 This is a safety gate for the estimated-pose controller; ground truth remains
 evaluation-only.
 
-The confirmation is dual-source when `/localized_estimate` drives the
-controller: the independent `/state_estimate` wheel/IMU pose must also lie
-within the goal tolerance while the fresh accepted events arrive. This does not use
-Gazebo ground truth. It rejects a scan matcher that is locally consistent but
-has selected a wrong map location; if the two estimates disagree, the robot
-stops and the run remains unsuccessful rather than declaring a goal event.
+The confirmation sources are configured explicitly. Setting
+`require_localization_match_for_goal:=true` requires a fresh valid LiDAR match
+and consecutive new `accepted` events. Setting
+`require_goal_reference_for_goal:=true` adds an independent pose check using
+`goal_reference_topic`, `goal_reference_tolerance`, and
+`goal_reference_position_sigma_max_m`. A dual-source test can therefore use
+`/state_estimate` for control and `/localized_estimate` for terminal
+confirmation, or reverse those roles, without changing the confirmation
+contract implicitly when `navigation_pose_topic` changes. This does not use
+Gazebo ground truth. If the configured estimates disagree, the robot does not
+declare success and the run remains diagnostically unsuccessful.
 
 The reference pose must also report a largest planar 1-sigma uncertainty no
 greater than `0.15 m` by default. This is computed from the largest eigenvalue

@@ -48,6 +48,87 @@ def pose_error(first: list[object], second: list[object]) -> float:
     return math.hypot(float(first[0]) - float(second[0]), float(first[1]) - float(second[1]))
 
 
+def mcl_audit_report(
+    records: list[dict[str, object]],
+    selected_id: int | None = None,
+) -> dict[str, object]:
+    """Summarize an MCL audit without pretending it is matcher replayable.
+
+    MCL records contain particle-filter evidence, not the immutable
+    ``match_input``/``match_result`` pair consumed by ``LidarMapMatcher``.
+    Returning a structured skip report keeps this command useful in mixed
+    experiment folders while directing users to the MCL-specific summary
+    tool for the actual diagnostics.
+    """
+    updates = [
+        record
+        for record in records
+        if record.get("record_type") == "mcl_update"
+        and (selected_id is None or int(record.get("match_id", -1)) == selected_id)
+    ]
+    statuses = Counter(str(record.get("status", "unknown")) for record in updates)
+    applied = [
+        bool(record.get("measurement_applied", False)) for record in updates
+    ]
+    corrections = [
+        float(record.get("correction_m", 0.0))
+        for record in updates
+        if record.get("correction_m") is not None
+    ]
+    return {
+        "audit_mode": "mcl",
+        "replay_supported": False,
+        "replay_note": (
+            "MCL audits do not contain LidarMapMatcher input/result pairs; "
+            "use tools/summarize_mcl_diagnostics.py."
+        ),
+        "input_records": len(updates),
+        "result_records": len(updates),
+        "replayed_records": 0,
+        "status_counts": dict(statuses),
+        "rejection_reason_counts": {},
+        "quality_valid_records": sum(
+            status == "accepted" for status in statuses.elements()
+        ),
+        "accepted_records": sum(applied),
+        "candidate_not_applied_records": 0,
+        "candidate_correction_max_m": max(corrections, default=0.0),
+        "applied_correction_max_m": max(
+            (
+                float(record.get("correction_m", 0.0))
+                for record in updates
+                if record.get("measurement_applied", False)
+            ),
+            default=0.0,
+        ),
+        "max_pose_error_m": None,
+        "max_score_error_m": None,
+        "point_count_mismatches": 0,
+        "mismatch_count": 0,
+        "match_age_mean_s": statistics.mean(
+            float(record["scan_pose_age_s"])
+            for record in updates
+            if record.get("scan_pose_age_s") is not None
+        ) if any(record.get("scan_pose_age_s") is not None for record in updates) else None,
+        "match_age_max_s": max(
+            (
+                float(record["scan_pose_age_s"])
+                for record in updates
+                if record.get("scan_pose_age_s") is not None
+            ),
+            default=None,
+        ),
+        "worker_compute_time_mean_s": None,
+        "worker_compute_time_max_s": None,
+        "odom_motion_mean_m": None,
+        "odom_motion_max_m": None,
+        "odom_yaw_change_mean_rad": None,
+        "odom_yaw_change_max_rad": None,
+        "unfinished_input_ids": [],
+        "mismatches": [],
+    }
+
+
 def replay(path: Path, selected_id: int | None = None) -> dict[str, object]:
     """Replay all complete input/result pairs in an audit file."""
     records = read_records(path)
@@ -58,6 +139,8 @@ def replay(path: Path, selected_id: int | None = None) -> dict[str, object]:
 
     matcher_config = config.get("matcher")
     if not isinstance(matcher_config, dict):
+        if config.get("backend") == "mcl":
+            return mcl_audit_report(records, selected_id)
         raise ValueError("config record has no matcher configuration")
     matcher = LidarMapMatcher(**matcher_config)
     matcher.update_map(
@@ -238,6 +321,10 @@ def main() -> None:
     args = parser.parse_args()
     report = replay(args.audit, args.match_id)
     print(f"audit: {args.audit}")
+    if "audit_mode" in report:
+        print(f"audit_mode: {report['audit_mode']}")
+        print(f"replay_supported: {report['replay_supported']}")
+        print(f"replay_note: {report['replay_note']}")
     for name in (
         "input_records",
         "result_records",

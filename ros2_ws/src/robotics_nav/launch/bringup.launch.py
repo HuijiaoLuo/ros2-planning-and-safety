@@ -1,9 +1,10 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
+from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch_ros.actions import Node
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 
 
 def generate_launch_description():
@@ -21,6 +22,7 @@ def generate_launch_description():
     scan_noise_std_m = LaunchConfiguration("scan_noise_std_m")
     scan_noise_seed = LaunchConfiguration("scan_noise_seed")
     navigation_pose_topic = LaunchConfiguration("navigation_pose_topic")
+    control_pose_topic = LaunchConfiguration("control_pose_topic")
     goal_event_topic = LaunchConfiguration("goal_event_topic")
     goal_tolerance = LaunchConfiguration("goal_tolerance")
     goal_confirmation_timeout_s = LaunchConfiguration(
@@ -36,6 +38,20 @@ def generate_launch_description():
         "goal_confirmation_max_pose_age_s"
     )
     final_approach_speed_m_s = LaunchConfiguration("final_approach_speed_m_s")
+    require_localization_match_for_goal = LaunchConfiguration(
+        "require_localization_match_for_goal"
+    )
+    require_timestamped_localization_evidence = LaunchConfiguration(
+        "require_timestamped_localization_evidence"
+    )
+    require_goal_reference_for_goal = LaunchConfiguration(
+        "require_goal_reference_for_goal"
+    )
+    goal_reference_topic = LaunchConfiguration("goal_reference_topic")
+    goal_reference_tolerance = LaunchConfiguration("goal_reference_tolerance")
+    goal_reference_position_sigma_max_m = LaunchConfiguration(
+        "goal_reference_position_sigma_max_m"
+    )
     estimation_output = LaunchConfiguration("estimation_output")
     estimation_trace_output = LaunchConfiguration("estimation_trace_output")
     imu_gyro_bias_rad_s = LaunchConfiguration("imu_gyro_bias_rad_s")
@@ -44,10 +60,42 @@ def generate_launch_description():
     wheel_slip_ratio = LaunchConfiguration("wheel_slip_ratio")
     wheel_slip_noise_std = LaunchConfiguration("wheel_slip_noise_std")
     position_mode = LaunchConfiguration("position_mode")
+    motion_prior_topic = LaunchConfiguration("motion_prior_topic")
     localization_output_topic = LaunchConfiguration("localization_output_topic")
+    localization_belief_topic = LaunchConfiguration("localization_belief_topic")
+    localization_backend = LaunchConfiguration("localization_backend")
     localization_diagnostic_output = LaunchConfiguration(
         "localization_diagnostic_output"
     )
+    mcl_particle_count = LaunchConfiguration("mcl_particle_count")
+    mcl_motion_distance_noise_std_m = LaunchConfiguration(
+        "mcl_motion_distance_noise_std_m"
+    )
+    mcl_motion_yaw_noise_std_rad = LaunchConfiguration(
+        "mcl_motion_yaw_noise_std_rad"
+    )
+    mcl_lidar_range_sigma_m = LaunchConfiguration("mcl_lidar_range_sigma_m")
+    mcl_lidar_likelihood_floor = LaunchConfiguration(
+        "mcl_lidar_likelihood_floor"
+    )
+    mcl_resample_ess_ratio = LaunchConfiguration("mcl_resample_ess_ratio")
+    mcl_random_seed = LaunchConfiguration("mcl_random_seed")
+    mcl_initial_position_std_m = LaunchConfiguration(
+        "mcl_initial_position_std_m"
+    )
+    mcl_initial_heading_std_rad = LaunchConfiguration(
+        "mcl_initial_heading_std_rad"
+    )
+    mcl_initialization_mode = LaunchConfiguration("mcl_initialization_mode")
+    mcl_minimum_valid_beams = LaunchConfiguration("mcl_minimum_valid_beams")
+    mcl_observation_window_size = LaunchConfiguration(
+        "mcl_observation_window_size"
+    )
+    mcl_max_scan_pose_age_s = LaunchConfiguration("mcl_max_scan_pose_age_s")
+    mcl_max_position_std_m = LaunchConfiguration("mcl_max_position_std_m")
+    mcl_max_normalized_entropy = LaunchConfiguration("mcl_max_normalized_entropy")
+    mcl_update_rate_hz = LaunchConfiguration("mcl_update_rate_hz")
+    mcl_scan_stride = LaunchConfiguration("mcl_scan_stride")
     localization_search_radius_m = LaunchConfiguration("localization_search_radius_m")
     localization_search_step_m = LaunchConfiguration("localization_search_step_m")
     localization_scan_stride = LaunchConfiguration("localization_scan_stride")
@@ -121,6 +169,7 @@ def generate_launch_description():
     )
     wheel_weight = LaunchConfiguration("wheel_weight")
     fusion_mode = LaunchConfiguration("fusion_mode")
+    external_position_fusion = LaunchConfiguration("external_position_fusion")
     gyro_rate_noise_std_rad_s = LaunchConfiguration("gyro_rate_noise_std_rad_s")
     wheel_yaw_noise_std_rad = LaunchConfiguration("wheel_yaw_noise_std_rad")
     gyro_bias_mode = LaunchConfiguration("gyro_bias_mode")
@@ -232,8 +281,17 @@ def generate_launch_description():
                 "navigation_pose_topic",
                 default_value="/odom",
                 description=(
-                    "Pose topic consumed by navigation and safety nodes. "
-                    "The default /odom preserves the ideal V2 baseline."
+                    "Pose topic recorded as the navigation/localization result "
+                    "by the evaluation logger."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "control_pose_topic",
+                default_value="/odom",
+                description=(
+                    "Continuous pose topic consumed by the planner, controller, "
+                    "and safety supervisor. Keep this separate from an "
+                    "asynchronous localization output to avoid control-pose jumps."
                 ),
             ),
             DeclareLaunchArgument(
@@ -292,6 +350,51 @@ def generate_launch_description():
                 ),
             ),
             DeclareLaunchArgument(
+                "require_localization_match_for_goal",
+                default_value="false",
+                description=(
+                    "Require a fresh accepted LiDAR localization event before "
+                    "latching the goal."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "require_timestamped_localization_evidence",
+                default_value="false",
+                description=(
+                    "Require new accepted timestamped localization candidates "
+                    "after entering the goal tolerance before latching."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "require_goal_reference_for_goal",
+                default_value="false",
+                description=(
+                    "Require the configured independent goal-reference pose "
+                    "and its covariance before latching the goal."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "goal_reference_topic",
+                default_value="/state_estimate",
+                description="Independent pose topic used for terminal confirmation.",
+            ),
+            DeclareLaunchArgument(
+                "goal_reference_tolerance",
+                default_value="-1.0",
+                description=(
+                    "Independent-reference goal tolerance; negative reuses "
+                    "goal_tolerance."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "goal_reference_position_sigma_max_m",
+                default_value="0.15",
+                description=(
+                    "Maximum 1-sigma planar uncertainty allowed for the "
+                    "independent goal reference."
+                ),
+            ),
+            DeclareLaunchArgument(
                 "estimation_output",
                 default_value="",
                 description="Optional CSV path for V3 estimator error diagnostics.",
@@ -344,9 +447,133 @@ def generate_launch_description():
                 ),
             ),
             DeclareLaunchArgument(
+                "motion_prior_topic",
+                default_value="/state_prediction",
+                description=(
+                    "Wheel/IMU-only prediction topic used as the motion prior "
+                    "by asynchronous map localizers."
+                ),
+            ),
+            DeclareLaunchArgument(
                 "localization_output_topic",
                 default_value="/localized_estimate",
                 description="Output topic for the optional LiDAR-map corrected pose.",
+            ),
+            DeclareLaunchArgument(
+                "localization_belief_topic",
+                default_value="/localization_belief",
+                description=(
+                    "Per-update MCL posterior-quality event stream, separate "
+                    "from accepted correction events."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "localization_backend",
+                default_value="v4",
+                description=(
+                    "Localization backend: v4 local matcher, mcl particle "
+                    "filter, or icp point-to-point registration."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "mcl_particle_count",
+                default_value="500",
+                description="Particle count; fixed for cross-map experiments.",
+            ),
+            DeclareLaunchArgument(
+                "mcl_motion_distance_noise_std_m",
+                default_value="0.01",
+                description="Motion-model distance noise standard deviation.",
+            ),
+            DeclareLaunchArgument(
+                "mcl_motion_yaw_noise_std_rad",
+                default_value="0.01",
+                description="Motion-model yaw noise standard deviation.",
+            ),
+            DeclareLaunchArgument(
+                "mcl_lidar_range_sigma_m",
+                default_value="0.08",
+                description="Occupancy likelihood-field range sigma.",
+            ),
+            DeclareLaunchArgument(
+                "mcl_lidar_likelihood_floor",
+                default_value="1e-6",
+                description="Likelihood floor for invalid map evidence.",
+            ),
+            DeclareLaunchArgument(
+                "mcl_resample_ess_ratio",
+                default_value="0.5",
+                description="Resampling threshold as a fraction of particles.",
+            ),
+            DeclareLaunchArgument(
+                "mcl_random_seed",
+                default_value="0",
+                description="Particle-filter random seed.",
+            ),
+            DeclareLaunchArgument(
+                "mcl_initial_position_std_m",
+                default_value="0.05",
+                description="Initial position spread around the state estimate.",
+            ),
+            DeclareLaunchArgument(
+                "mcl_initial_heading_std_rad",
+                default_value="0.10",
+                description="Initial heading spread around the state estimate.",
+            ),
+            DeclareLaunchArgument(
+                "mcl_initialization_mode",
+                default_value="local",
+                description=(
+                    "MCL prior: local Gaussian around odometry or global "
+                    "uniform free-space hypotheses."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "mcl_minimum_valid_beams",
+                default_value="6",
+                description="Minimum valid scan beams for an accepted update.",
+            ),
+            DeclareLaunchArgument(
+                "mcl_observation_window_size",
+                default_value="3",
+                description=(
+                    "Number of consecutive odometry-compensated scans jointly "
+                    "scored by the particle filter."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "mcl_max_scan_pose_age_s",
+                default_value="0.25",
+                description=(
+                    "Reject a scan when its timestamp is older than the "
+                    "current state-estimate timestamp by this bound."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "mcl_max_position_std_m",
+                default_value="0.15",
+                description=(
+                    "Reject a candidate when its largest one-sigma planar "
+                    "position standard deviation exceeds this bound."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "mcl_max_normalized_entropy",
+                default_value="0.98",
+                description=(
+                    "Reject a large correction when normalized particle "
+                    "entropy exceeds this information-quality bound."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "mcl_update_rate_hz",
+                default_value="2.0",
+                description="LiDAR update rate; pose publication remains high-rate.",
+            ),
+            DeclareLaunchArgument(
+                "mcl_scan_stride",
+                default_value="6",
+                description="LiDAR beam stride used for the likelihood update.",
             ),
             DeclareLaunchArgument(
                 "localization_diagnostic_output",
@@ -571,6 +798,14 @@ def generate_launch_description():
                 description="Fusion mode: fixed, adaptive heading, or full pose EKF.",
             ),
             DeclareLaunchArgument(
+                "external_position_fusion",
+                default_value="false",
+                description=(
+                    "Fuse one accepted map-localizer position event into the "
+                    "pose EKF; requires fusion_mode=ekf."
+                ),
+            ),
+            DeclareLaunchArgument(
                 "gyro_rate_noise_std_rad_s",
                 default_value="0.01",
                 description="Gyro rate standard deviation used by adaptive fusion.",
@@ -671,7 +906,10 @@ def generate_launch_description():
                         "wheel_odom_topic": "/wheel_odom",
                         "imu_topic": "/imu",
                         "output_topic": "/state_estimate",
+                        "motion_prior_topic": motion_prior_topic,
                         "fusion_mode": fusion_mode,
+                        "external_position_fusion": external_position_fusion,
+                        "external_position_topic": "/localization_candidate",
                         "wheel_weight": wheel_weight,
                         "gyro_rate_noise_std_rad_s": gyro_rate_noise_std_rad_s,
                         "wheel_yaw_noise_std_rad": wheel_yaw_noise_std_rad,
@@ -720,6 +958,7 @@ def generate_launch_description():
                         "configured_position_mode": position_mode,
                         "configured_wheel_weight": wheel_weight,
                         "configured_fusion_mode": fusion_mode,
+                        "configured_external_position_fusion": external_position_fusion,
                         "configured_gyro_rate_noise_std_rad_s": gyro_rate_noise_std_rad_s,
                         "configured_wheel_yaw_noise_std_rad": wheel_yaw_noise_std_rad,
                         "configured_gyro_bias_random_walk_std_rad_s2": gyro_bias_random_walk_std_rad_s2,
@@ -745,10 +984,17 @@ def generate_launch_description():
                 executable="lidar_localizer",
                 name="lidar_localizer",
                 output="screen",
+                # The legacy localizer is the explicit V4 backend.  Keeping
+                # this as a positive condition avoids accidentally starting
+                # it alongside MCL/ICP across ROS 2 launch versions.
+                condition=IfCondition(
+                    PythonExpression(["'", localization_backend, "' == 'v4'"])
+                ),
                 parameters=[
                     {
-                        "input_pose_topic": "/state_estimate",
+                        "input_pose_topic": motion_prior_topic,
                         "output_pose_topic": localization_output_topic,
+                        "belief_topic": localization_belief_topic,
                         "diagnostic_output": localization_diagnostic_output,
                         "scan_topic": "/scan",
                         "map_topic": "/map",
@@ -788,6 +1034,65 @@ def generate_launch_description():
             ),
             Node(
                 package="robotics_nav",
+                executable="mcl_localizer",
+                name="mcl_localizer",
+                output="screen",
+                condition=IfCondition(
+                    PythonExpression(["'", localization_backend, "' == 'mcl'"])
+                ),
+                parameters=[
+                    {
+                        "input_pose_topic": motion_prior_topic,
+                        "output_pose_topic": localization_output_topic,
+                        "scan_topic": "/scan",
+                        "map_topic": "/map",
+                        "diagnostic_output": localization_diagnostic_output,
+                        "publish_rate_hz": localization_publish_rate_hz,
+                        "update_rate_hz": mcl_update_rate_hz,
+                        "scan_stride": mcl_scan_stride,
+                        "particle_count": mcl_particle_count,
+                        "motion_distance_noise_std_m": mcl_motion_distance_noise_std_m,
+                        "motion_yaw_noise_std_rad": mcl_motion_yaw_noise_std_rad,
+                        "lidar_range_sigma_m": mcl_lidar_range_sigma_m,
+                        "lidar_likelihood_floor": mcl_lidar_likelihood_floor,
+                        "resample_ess_ratio": mcl_resample_ess_ratio,
+                        "random_seed": mcl_random_seed,
+                        "initial_position_std_m": mcl_initial_position_std_m,
+                        "initial_heading_std_rad": mcl_initial_heading_std_rad,
+                        "initialization_mode": mcl_initialization_mode,
+                        "minimum_valid_beams": mcl_minimum_valid_beams,
+                        "observation_window_size": mcl_observation_window_size,
+                        "max_scan_pose_age_s": mcl_max_scan_pose_age_s,
+                        "max_position_std_m": mcl_max_position_std_m,
+                        "max_normalized_entropy": mcl_max_normalized_entropy,
+                    }
+                ],
+            ),
+            Node(
+                package="robotics_nav",
+                executable="icp_localizer",
+                name="icp_localizer",
+                output="screen",
+                condition=IfCondition(
+                    PythonExpression(["'", localization_backend, "' == 'icp'"])
+                ),
+                parameters=[
+                    {
+                        "input_pose_topic": motion_prior_topic,
+                        "output_pose_topic": localization_output_topic,
+                        "external_position_topic": "/localization_candidate",
+                        "scan_topic": "/scan",
+                        "map_topic": "/map",
+                        "diagnostic_output": localization_diagnostic_output,
+                        "publish_rate_hz": localization_publish_rate_hz,
+                        "match_rate_hz": localization_match_rate_hz,
+                        "scan_stride": localization_scan_stride,
+                        "output_frame_id": localization_map_frame_id,
+                    }
+                ],
+            ),
+            Node(
+                package="robotics_nav",
                 executable="path_follower",
                 name="path_follower",
                 output="screen",
@@ -809,12 +1114,26 @@ def generate_launch_description():
                         "goal_confirmation_max_pose_age_s": (
                             goal_confirmation_max_pose_age_s
                         ),
+                        "require_localization_match_for_goal": (
+                            require_localization_match_for_goal
+                        ),
+                        "require_timestamped_localization_evidence": (
+                            require_timestamped_localization_evidence
+                        ),
+                        "require_goal_reference_for_goal": (
+                            require_goal_reference_for_goal
+                        ),
+                        "goal_reference_topic": goal_reference_topic,
+                        "goal_reference_tolerance": goal_reference_tolerance,
+                        "goal_reference_position_sigma_max_m": (
+                            goal_reference_position_sigma_max_m
+                        ),
                         "rotate_in_place_threshold": 0.5235987756,
                         "final_approach_distance": 0.60,
                         "final_approach_heading_gain": 1.0,
                         "final_approach_max_angular_speed": 0.60,
                         "heading_deadband": 0.03,
-                        "odom_topic": navigation_pose_topic,
+                        "odom_topic": control_pose_topic,
                         "goal_event_topic": goal_event_topic,
                         "use_sim_time": True,
                     }
@@ -842,7 +1161,7 @@ def generate_launch_description():
                         "recovery_turn_sign": -1.0,
                         "max_tilt_deg": 10.0,
                         "publish_rate_hz": 20.0,
-                        "odom_topic": navigation_pose_topic,
+                        "odom_topic": control_pose_topic,
                     }
                 ],
             ),
@@ -867,7 +1186,7 @@ def generate_launch_description():
                         "robot_radius_m": planning_radius_m,
                         "minimum_clearance_m": minimum_clearance,
                         "safety_margin_m": safety_margin,
-                        "odom_topic": navigation_pose_topic,
+                        "odom_topic": control_pose_topic,
                     }
                 ],
             ),

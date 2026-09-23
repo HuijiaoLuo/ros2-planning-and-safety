@@ -203,6 +203,9 @@ class EvaluationLogger(Node):
         self.latest_confirmation_duration_s: Optional[float] = None
         self.goal_confirmation_timeout_count = 0
         self.final_approach_reentry_count = 0
+        self.latest_localization_candidate_events_since_entry = 0
+        self.latest_localization_candidate_stamp_s: Optional[float] = None
+        self.latest_localization_candidate_receipt_age_s: Optional[float] = None
 
         # Monotonic receipt times are deliberately kept separate from ROS
         # header stamps.  Header stamps describe when data was generated in
@@ -230,6 +233,7 @@ class EvaluationLogger(Node):
         self.started_at: Optional[float] = None
         self.goal_reached_at: Optional[float] = None
         self.navigation_goal_reached_at: Optional[float] = None
+        self.navigation_independent_goal_reached_at: Optional[float] = None
         self.state_estimate_goal_reached_at: Optional[float] = None
         self.termination_reason: Optional[str] = None
 
@@ -481,9 +485,16 @@ class EvaluationLogger(Node):
                 continue
             key, value = item.split("=", 1)
             fields[key] = value
-        if fields.get("event") == "goal_reached_latched":
+        event_name = fields.get("event")
+        if event_name == "goal_reached_latched":
             self.controller_goal_latched = True
-        if fields.get("event") == "goal_confirmation_failed":
+        if event_name in {
+            "goal_confirmation_failed",
+            "final_approach_budget_exhausted",
+        }:
+            # GOAL_UNCONFIRMED is a terminal safety outcome.  Treating only
+            # the timeout event as diagnostic would leave the logger running
+            # forever after the follower has correctly stopped the robot.
             self.controller_goal_failed = True
         self.latest_goal_state = fields.get("goal_state") or self.latest_goal_state
         start_text = fields.get("confirmation_start_time_s", "")
@@ -500,6 +511,7 @@ class EvaluationLogger(Node):
             )
         except ValueError:
             self.latest_confirmation_duration_s = None
+
         try:
             self.goal_confirmation_timeout_count = int(
                 fields.get(
@@ -518,6 +530,41 @@ class EvaluationLogger(Node):
             )
         except ValueError:
             pass
+        try:
+            self.latest_localization_candidate_events_since_entry = int(
+                fields.get(
+                    "localization_candidate_events_since_entry",
+                    self.latest_localization_candidate_events_since_entry,
+                )
+            )
+        except ValueError:
+            pass
+        try:
+            candidate_stamp = fields.get("localization_candidate_stamp_s", "")
+            self.latest_localization_candidate_stamp_s = (
+                None if not candidate_stamp else float(candidate_stamp)
+            )
+        except ValueError:
+            self.latest_localization_candidate_stamp_s = None
+        try:
+            candidate_age = fields.get(
+                "localization_candidate_receipt_age_s", ""
+            )
+            self.latest_localization_candidate_receipt_age_s = (
+                None if not candidate_age else float(candidate_age)
+            )
+        except ValueError:
+            self.latest_localization_candidate_receipt_age_s = None
+
+        if event_name in {
+            "goal_confirmation_failed",
+            "final_approach_budget_exhausted",
+        }:
+            # The path follower has already issued a zero-velocity command and
+            # will wait for a new path.  End the evaluation at this causal
+            # terminal event instead of waiting for the global timeout or a
+            # manual Ctrl+C.
+            self.finish_run(event_name)
 
     def localization_match_score_callback(self, message: Float64) -> None:
         self.latest_localization_match_score_m = float(message.data)
@@ -677,6 +724,19 @@ class EvaluationLogger(Node):
                     and self.navigation_goal_reached_at is None
                 ):
                     self.navigation_goal_reached_at = now
+                navigation_pose_is_independent = (
+                    self.navigation_pose_topic == "/odom"
+                    or (
+                        self.navigation_pose_topic != self.state_estimate_topic
+                        and self.latest_localization_match_valid is True
+                    )
+                )
+                if (
+                    navigation_goal_distance <= self.goal_tolerance
+                    and navigation_pose_is_independent
+                    and self.navigation_independent_goal_reached_at is None
+                ):
+                    self.navigation_independent_goal_reached_at = now
             if self.latest_state_estimate is not None:
                 state_position = self.latest_state_estimate.pose.pose.position
                 state_estimate_goal_distance = distance_2d(
@@ -698,6 +758,20 @@ class EvaluationLogger(Node):
         navigation_goal_within_tolerance = (
             navigation_goal_distance is not None
             and navigation_goal_distance <= self.goal_tolerance
+        )
+        navigation_pose_is_independent = (
+            self.navigation_pose_topic == "/odom"
+            or (
+                self.navigation_pose_topic != self.state_estimate_topic
+                and self.latest_localization_match_valid is True
+            )
+        )
+        navigation_pose_fallback_active = (
+            self.navigation_pose_topic != self.state_estimate_topic
+            and self.latest_localization_match_valid is not True
+        )
+        navigation_independent_goal_within_tolerance = (
+            navigation_goal_within_tolerance and navigation_pose_is_independent
         )
         state_estimate_goal_within_tolerance = (
             state_estimate_goal_distance is not None
@@ -824,6 +898,11 @@ class EvaluationLogger(Node):
                 "navigation_goal_within_tolerance": (
                     navigation_goal_within_tolerance
                 ),
+                "navigation_pose_is_independent": navigation_pose_is_independent,
+                "navigation_pose_fallback_active": navigation_pose_fallback_active,
+                "navigation_independent_goal_within_tolerance": (
+                    navigation_independent_goal_within_tolerance
+                ),
                 "state_estimate_goal_error_m": state_estimate_goal_distance,
                 "state_estimate_goal_within_tolerance": (
                     state_estimate_goal_within_tolerance
@@ -867,6 +946,15 @@ class EvaluationLogger(Node):
                 "confirmation_duration_s": self.latest_confirmation_duration_s,
                 "confirmation_timeout_count": self.goal_confirmation_timeout_count,
                 "final_approach_reentry_count": self.final_approach_reentry_count,
+                "localization_candidate_events_since_entry": (
+                    self.latest_localization_candidate_events_since_entry
+                ),
+                "localization_candidate_stamp_s": (
+                    self.latest_localization_candidate_stamp_s
+                ),
+                "localization_candidate_receipt_age_s": (
+                    self.latest_localization_candidate_receipt_age_s
+                ),
                 "goal_confirmation_timeout": (
                     self.goal_confirmation_timeout_count > 0
                 ),
@@ -978,6 +1066,12 @@ class EvaluationLogger(Node):
             or self.navigation_goal_reached_at is None
             else self.navigation_goal_reached_at - self.started_at
         )
+        navigation_independent_time_to_goal = (
+            None
+            if self.started_at is None
+            or self.navigation_independent_goal_reached_at is None
+            else self.navigation_independent_goal_reached_at - self.started_at
+        )
         state_estimate_time_to_goal = (
             None
             if self.started_at is None
@@ -1024,8 +1118,32 @@ class EvaluationLogger(Node):
             "navigation_pose_goal_reached_any_time": (
                 self.navigation_goal_reached_at is not None
             ),
+            "navigation_pose_independent_goal_reached": (
+                self.navigation_independent_goal_reached_at is not None
+            ),
+            "navigation_pose_independent_goal_reached_any_time": (
+                self.navigation_independent_goal_reached_at is not None
+            ),
+            "navigation_pose_is_independent_final": (
+                False
+                if final_sample is None
+                else bool(final_sample.get("navigation_pose_is_independent"))
+            ),
+            "navigation_pose_fallback_active_final": (
+                False
+                if final_sample is None
+                else bool(final_sample.get("navigation_pose_fallback_active"))
+            ),
             "navigation_pose_final_within_goal_tolerance": (
                 navigation_final_within_tolerance
+            ),
+            "navigation_pose_independent_final_within_goal_tolerance": (
+                navigation_final_within_tolerance
+                and (
+                    False
+                    if final_sample is None
+                    else bool(final_sample.get("navigation_pose_is_independent"))
+                )
             ),
             "start_x": self.start_x,
             "start_y": self.start_y,
@@ -1060,6 +1178,15 @@ class EvaluationLogger(Node):
             "confirmation_duration_s": self.latest_confirmation_duration_s,
             "confirmation_timeout_count": self.goal_confirmation_timeout_count,
             "final_approach_reentry_count": self.final_approach_reentry_count,
+            "localization_candidate_events_since_entry": (
+                self.latest_localization_candidate_events_since_entry
+            ),
+            "localization_candidate_stamp_s": (
+                self.latest_localization_candidate_stamp_s
+            ),
+            "localization_candidate_receipt_age_s": (
+                self.latest_localization_candidate_receipt_age_s
+            ),
             "goal_confirmation_timeout": (
                 self.goal_confirmation_timeout_count > 0
             ),
@@ -1127,6 +1254,9 @@ class EvaluationLogger(Node):
             "elapsed_time_s": elapsed,
             "time_to_goal_s": time_to_goal,
             "navigation_pose_time_to_goal_s": navigation_time_to_goal,
+            "navigation_pose_independent_time_to_goal_s": (
+                navigation_independent_time_to_goal
+            ),
             "state_estimate_time_to_goal_s": state_estimate_time_to_goal,
             "initial_planned_path_length_m": self.initial_planned_path_length,
             "latest_planned_path_length_m": self.latest_planned_path_length,
@@ -1243,6 +1373,9 @@ class EvaluationLogger(Node):
                 "ground_truth_goal_within_tolerance",
                 "navigation_goal_error_m",
                 "navigation_goal_within_tolerance",
+                "navigation_pose_is_independent",
+                "navigation_pose_fallback_active",
+                "navigation_independent_goal_within_tolerance",
                 "state_estimate_goal_error_m",
                 "state_estimate_goal_within_tolerance",
                 "yaw_rad",
@@ -1275,6 +1408,9 @@ class EvaluationLogger(Node):
                 "confirmation_duration_s",
                 "confirmation_timeout_count",
                 "final_approach_reentry_count",
+                "localization_candidate_events_since_entry",
+                "localization_candidate_stamp_s",
+                "localization_candidate_receipt_age_s",
                 "goal_confirmation_timeout",
                 "controller_goal_event_history",
                 "odom_receipt_age_s",

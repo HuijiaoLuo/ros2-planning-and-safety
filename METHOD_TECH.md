@@ -17,25 +17,30 @@ The map-localization and covariance-aware pose-filter experiments are separate
 diagnostic layers; neither corrected pose is yet a validated control input.
 
 The latest controlled evidence supports this boundary. The estimator and
-localizer now expose covariance, NIS, score-margin, Mahalanobis, freshness, and
-applied-correction diagnostics. In a representative localized-navigation run,
-`/localized_estimate` finished `0.0325 m` from the goal while `/state_estimate`
-finished `0.0664 m` and physical `/odom` finished `0.0762 m` away. Only three
-online LiDAR correction events were applied, with a maximum smoothed correction
-of `0.0225 m`; the run timed out without collision and without sustained safety
-recovery. This demonstrates an estimated-goal/physical-goal gap, not a
-validated replacement for `/odom`.
+localizers expose covariance, NIS, score-margin, Mahalanobis, freshness, and
+applied-correction diagnostics. When external MCL corrections drove
+`/state_estimate` and that topic was consumed by the controller, the physical
+final error was about `0.108 m`. With the same external fusion enabled but
+control using the independent `/state_prediction`, the physical error was
+about `0.062 m`, close to the `0.060 m` no-external-fusion ablation. A bounded
+final-approach test entered recovery and stopped safely, but MCL still reported
+a near-goal pose while `/odom` remained about `0.082 m` from the goal. This
+demonstrates a control-pose and local-observability failure, not a validated
+replacement for `/odom`.
 
 Consequently, parameter changes are treated as controlled experiments rather
-than open-ended tuning. The calibrated EKF and safety configuration are frozen
-for the current comparison. The next work is a repeatable multi-seed study of
-localization-to-control failure propagation, using the existing audit and
-diagnostic tools before changing the estimator or matcher.
+than open-ended tuning. The calibrated EKF, safety policy, and high-rate
+control contract are frozen. The next model stage compares multi-hypothesis
+known-map localization and point-registration models with the same map, scan,
+motion prior, controller, and safety policy. Its purpose is to determine
+whether the failure is specific to a single local hypothesis or is caused by
+map geometry and local observability more generally.
 
 Focused notes are split by topic: [`docs/STATE_ESTIMATION.md`](docs/STATE_ESTIMATION.md)
 for transparent wheel/IMU fusion, [`docs/POSE_EKF.md`](docs/POSE_EKF.md) for
 covariance-aware pose estimation, and [`docs/LOCALIZATION.md`](docs/LOCALIZATION.md)
-for the gated LiDAR-to-map matcher.
+for the gated LiDAR-to-map matcher. The independent point-registration
+comparison is described in [`docs/ICP_LOCALIZATION.md`](docs/ICP_LOCALIZATION.md).
 
 ## 1. Problem definition
 
@@ -52,12 +57,13 @@ This is not yet a complete autonomous navigation stack. In the current stage:
 - the global map and SLAM are not used yet;
 - Nav2 is not used yet.
 
-The frozen baseline deliberately uses Gazebo's ideal `/odom` pose so that planner
-and safety experiments can be interpreted independently. The estimator adds a
-separate `/state_estimate` topic from wheel odometry and IMU heading fusion.
-The diagnostic runs that estimator in parallel and evaluates it against
-`/odom`; navigation remains on `/odom` until the estimated `x,y` state is
-validated.
+The frozen baseline deliberately uses Gazebo's ideal `/odom` pose so that
+planner and safety experiments can be interpreted independently. The estimator
+publishes a wheel/IMU-only `/state_prediction` and a separate
+`/state_estimate` that may consume external map-position events. The current
+localization experiments keep the high-rate controller on `/state_prediction`;
+the corrected estimate is evaluated and fused diagnostically until its global
+validity is established.
 
 The important engineering chain is:
 
@@ -145,7 +151,7 @@ where $L$ is the distance between the wheel contact points. Gazebo's DiffDrive s
 ## 4. ROS2 computation graph
 
 ~~~
-                 /odom (validated baseline) or /state_estimate (experimental)
+                 /odom (validated baseline) or /state_prediction (controlled estimate)
                            │
                            ▼
                  ┌────────────────────┐
@@ -170,9 +176,11 @@ where $L$ is the distance between the wheel contact points. Gazebo's DiffDrive s
 | /odom | nav_msgs/msg/Odometry | Gazebo → ROS2 | Ground-truth pose for the ideal MVP |
 | /wheel_odom | nav_msgs/msg/Odometry | Gazebo → ROS2 | DiffDrive wheel odometry for slip comparison |
 | /imu | sensor_msgs/msg/Imu | Gazebo → ROS2 | Angular velocity used by the heading estimator |
-| /state_estimate | nav_msgs/msg/Odometry | Estimator → navigation | Wheel/estimated position with fused heading; optional input |
+| /state_prediction | nav_msgs/msg/Odometry | Estimator → localizer/controller | Wheel/IMU-only propagated motion prior |
+| /state_estimate | nav_msgs/msg/Odometry | Estimator → diagnostics/optional fusion | State estimate after optional external map-position updates |
 | /scan | sensor_msgs/msg/LaserScan | Gazebo → ROS2 | LiDAR range measurements |
 | /localized_estimate | nav_msgs/msg/Odometry | Localizer → navigation | Opt-in gated LiDAR-map position correction |
+| /localization_candidate | nav_msgs/msg/Odometry | Map localizer → optional EKF | One event per accepted map-position candidate |
 | /localization_correction_m | std_msgs/msg/Float64 | Localizer → diagnostics | Applied correction magnitude in metres |
 | /localization_candidate_correction_m | std_msgs/msg/Float64 | Localizer → diagnostics | Raw candidate displacement before smoothing/gating |
 | /localization_candidate_dx_m | std_msgs/msg/Float64 | Localizer → diagnostics | Signed candidate x correction in the map frame |
@@ -190,12 +198,13 @@ where $L$ is the distance between the wheel contact points. Gazebo's DiffDrive s
 
 The distinction between /cmd_vel_raw and /cmd_vel is important. It makes the safety layer independently testable and gives the system a clear enforcement point: Gazebo never receives the controller's command directly.
 
-The simulation deliberately exposes two pose sources. The ideal-navigation
+The simulation deliberately exposes several pose sources. The ideal-navigation
 MVP uses `/odom`, generated from Gazebo's true model pose, so planning and
 control are not invalidated by wheel slip before the basic loop is verified.
 The DiffDrive plugin publishes `/wheel_odom` separately. The estimator adds an
-IMU and transparent heading fusion; `/state_estimate` can then replace `/odom`
-for navigation while `/odom` remains available only to the evaluation logger.
+IMU and transparent heading fusion; `/state_prediction` is the independent
+motion prior, while `/state_estimate` may be corrected by an external map
+observation. The latter is not a validated high-rate control source.
 
 The simulated actuator also has explicit linear and angular velocity and
 acceleration limits. These keep the ideal model physically stable when the
@@ -213,7 +222,8 @@ Gazebo publishes an IMU on `/imu`. The estimator consumes only the IMU angular
 velocity, not its orientation field. This prevents the simulated perfect
 orientation from becoming a hidden ground-truth input.
 
-The fixed V3 estimator first propagates its heading with the IMU angular rate:
+The transparent heading estimator first propagates its heading with the IMU
+angular rate:
 
 $$
 \theta_k^- = \mathrm{wrap}\left(\theta_{k-1}^{\mathrm{fused}} + \omega_{z,k}\Delta t_k\right)
@@ -252,7 +262,7 @@ in parallel:
 ros2 launch robotics_sim sim.launch.py \
   navigation_pose_topic:=/odom \
   experiment_timeout_s:=120.0 \
-  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v3_heading_diagnostic.csv
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/heading_diagnostic.csv
 ```
 
 Switching navigation to `/state_estimate` remains an exploratory experiment,
@@ -474,7 +484,8 @@ retained as a diagnostic innovation; it is not applied to the map-to-odom
 transform. Candidate consistency and repeated-correction checks therefore use
 only the candidate translation; scan-to-scan yaw variation does not block a
 coherent position update.
-The V4 EKF also publishes an x/y covariance with `/state_estimate`. The
+The covariance-aware pose EKF also publishes an x/y covariance with
+`/state_estimate`. The
 optional `localization_max_candidate_mahalanobis_sq` gate uses that covariance
 after the matcher has selected a candidate. For displacement $\delta p$ and
 map-frame covariance $P_{xy}$, the normalized correction is
@@ -542,16 +553,42 @@ must still be checked with `/odom`, because entering the estimated-pose goal
 tolerance alone does not prove that the robot reached the goal.
 
 The current validation keeps `/localized_estimate` experimental. The validated
-`/odom` baseline remains the physical reference. The latest process-backed
-localized-navigation run had `3` applied LiDAR correction events and no
-sustained safety recovery, but timed out with `0.0762 m` physical error even
-though the localized estimate was within `0.05 m`. The independent
-`/state_estimate` was still `0.0664 m` from the goal. The path follower
-therefore correctly reported statuses such as `waiting for independent
-estimate` and did not treat the localized pose as proof of physical arrival.
-The result is evidence that the asynchronous localizer and conservative
-confirmation gates are observable; it is not evidence of localization
-robustness or successful closed-loop navigation.
+`/odom` baseline remains the physical reference. In the final controlled
+comparison, direct corrected-state control produced about `0.108 m` physical
+error; separating control onto `/state_prediction` reduced it to about
+`0.062 m`. A bounded final-approach run entered recovery and stopped safely,
+but the localized estimate remained within about `0.029 m` while `/odom` was
+about `0.082 m` from the goal. The result is evidence that local map ambiguity,
+motion-model drift, and control-pose selection must be treated separately; it
+is not evidence of localization robustness or successful closed-loop
+navigation.
+
+### Optional coupled map-position update
+
+The known-map MCL backend now exposes one event topic,
+`/localization_candidate`, per accepted scan update. This topic is distinct
+from the repeated `/localized_estimate` navigation stream, so the same
+candidate cannot be fused at the localizer publish rate. With
+`external_position_fusion:=true` and `fusion_mode:=ekf`, the heading estimator
+passes the candidate position and its covariance to the pose EKF. The EKF
+performs a two-dimensional NIS-gated measurement update using the full state
+covariance, so existing position--yaw--bias cross-covariances provide the
+coupling. The default is disabled and the previous estimator baseline is
+unchanged. The mathematical model and validation plan are documented in
+[`docs/COUPLED_ESTIMATION.md`](docs/COUPLED_ESTIMATION.md).
+
+External map observations are now consumed at their source timestamp. The
+candidate header carries t_m, while the newest wheel/IMU state may already
+be at t_k. The estimator records the timestamped sensor event stream,
+inserts the candidate at t_m, applies the position update there, and
+replays the subsequent motion events.
+
+This avoids treating a delayed LiDAR result as a measurement of the current
+pose. The estimator publishes the physical observation age and whether
+history replay was used; the estimation report records both quantities.
+This is deterministic delayed-observation handling, not an additional
+correction parameter. It still assumes aligned map and odometry frames and
+does not solve global map aliasing.
 
 The read-only trace intentionally samples the latest diagnostic state at the
 logger rate. Therefore repeated `accepted` or `repeated_correction` rows in a
@@ -702,8 +739,8 @@ ros2 launch robotics_sim sim.launch.py \
   nis_gate_threshold:=9.0 \
   planning_radius_m:=0.41 \
   experiment_timeout_s:=120.0 \
-  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v4_ekf_smoke_eval.csv \
-  estimation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v4_ekf_smoke_metrics.csv
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/ekf_smoke_eval.csv \
+  estimation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/ekf_smoke_metrics.csv
 ```
 
 The first recorded smoke row completed the `/odom` baseline with
@@ -791,25 +828,40 @@ the same endpoint. A materially different endpoint clears the latch. This
 prevents estimator noise or repeated path publication from restarting terminal
 motion, but it does not correct the estimator's physical position error.
 
-When `odom_topic` is `/localized_estimate`, the follower adds an estimator-
-quality condition to this latch. The latest `/localization_match_valid` value
-must be true, and five consecutive *new* `accepted` messages on
-`/localization_match_status` must arrive after the pose enters the goal
-tolerance. The controller counts matcher events, not timer ticks: a latched
-boolean from one old scan cannot be sampled repeatedly and mistaken for five
-independent matches. Any invalid, stale, ambiguous, or repeated LiDAR match
-resets the event streak and publishes a stop command without declaring
-success. This prevents a single scan-map correction from becoming a false
-closed-loop goal event; it does not claim that estimated localization can
-certify physical ground-truth arrival.
+The terminal confirmation contract is explicit rather than inferred from the
+control-pose topic. Set `require_localization_match_for_goal:=true` to require
+that `/localization_match_valid` is true and that five consecutive *new*
+`accepted` messages on `/localization_match_status` arrive after the pose
+enters the goal tolerance. The controller counts matcher events, not timer
+ticks: a latched boolean from one old scan cannot be sampled repeatedly and
+mistaken for five independent matches. Any invalid, stale, ambiguous, or
+repeated LiDAR match resets the event streak and publishes a stop command
+without declaring success.
 
-The localized-navigation mode adds a second, independent confirmation: the
-wheel/IMU `/state_estimate` must also be within `goal_tolerance` of the goal
-when each fresh accepted event is confirmed. The controller still does not consume
-Gazebo ground truth. This dual-source rule is intentionally conservative: a
-LiDAR match can be internally valid yet correspond to a local map minimum, so
-disagreement between `/localized_estimate` and `/state_estimate` blocks the
-terminal latch and keeps the run diagnostically unsuccessful.
+For the MCL event stream, `require_timestamped_localization_evidence:=true`
+adds a stronger source-time contract. The controller subscribes to
+`/localization_candidate`, counts only new accepted `Odometry` events received
+after entering the goal tolerance, and checks their monotonic receipt age.
+The candidate header stamp is retained for correlation, but is not subtracted
+from the controller clock because simulator and system clocks may use
+different epochs. A fallback `/localized_estimate` pose or an old accepted
+candidate therefore cannot independently prove current physical arrival.
+
+Set `require_goal_reference_for_goal:=true` to add a second pose source. The
+topic is selected by `goal_reference_topic` (for example, `/state_estimate`),
+with `goal_reference_tolerance` and
+`goal_reference_position_sigma_max_m` defining its distance and uncertainty
+checks. This makes A/B experiments explicit: changing `navigation_pose_topic`
+does not silently enable or disable terminal confirmation. A dual-source
+localized-navigation test can therefore use `/state_estimate` for control and
+`/localized_estimate` as the independent confirmation source, while the
+controller still does not consume Gazebo ground truth.
+
+These gates are intentionally conservative: a LiDAR match can be internally
+valid yet correspond to a local map minimum, so disagreement between the two
+configured sources blocks the terminal latch and keeps the run diagnostically
+unsuccessful. They do not claim that estimated localization can certify
+physical ground-truth arrival.
 
 The terminal check also requires the largest planar 1-sigma uncertainty of
 `/state_estimate` to be at most `0.15 m` by default. For the x/y covariance
@@ -1290,8 +1342,8 @@ trace with:
 
 ```bash
 python tools/diagnose_navigation_trace.py \
-  --evaluation results/v4_diagnostic_instrumented_eval.csv \
-  --trace results/v4_diagnostic_instrumented_trace.csv
+  --evaluation results/diagnostic_instrumented_eval.csv \
+  --trace results/diagnostic_instrumented_trace.csv
 ```
 
 It reports whether the physical robot reached the goal, whether an estimated
@@ -1389,8 +1441,11 @@ total-run limit in the evaluation logger. A positive value causes the logger
 to finish the run and shut down the ROS graph after that many seconds from the
 first odometry sample; `0.0` disables the limit. The CSV records both
 `configured_experiment_timeout_s` and `termination_reason`, whose values can
-include `goal_reached`, `goal_confirmation_failed`, `experiment_timeout`, or
-`manual_interrupt`.
+include `goal_reached`, `goal_confirmation_failed`,
+`final_approach_budget_exhausted`, `experiment_timeout`, or
+`manual_interrupt`. A confirmation failure or exhausted final-approach budget
+is a causal terminal event: the evaluator ends the run when it is received,
+rather than leaving the stopped controller alive until the global timeout.
 Importantly, the logger no longer terminates with `goal_reached` merely because
 the ideal Gazebo `/odom` pose briefly enters the goal tolerance. That event is
 recorded as `ground_truth_goal_reached_any_time` (with the legacy

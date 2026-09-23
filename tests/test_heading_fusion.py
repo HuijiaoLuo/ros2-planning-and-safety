@@ -286,6 +286,128 @@ class HeadingFusionTests(unittest.TestCase):
         self.assertEqual(ekf.last_gain, 0.0)
         self.assertEqual(ekf.covariance, covariance_before)
 
+    def test_pose_ekf_fuses_external_position_with_reported_covariance(self) -> None:
+        ekf = PoseEKF(
+            initial_position_variance_m2=1.0,
+            initial_heading_variance_rad2=0.25,
+            initial_bias_variance_rad2_s2=1.0,
+            nis_gate_threshold=9.0,
+        )
+        ekf.update_wheel(0.0, x=0.0, y=0.0)
+        covariance_before = [row[:] for row in ekf.covariance]
+
+        accepted = ekf.update_external_position(
+            1.0,
+            -2.0,
+            [[0.04, 0.0], [0.0, 0.04]],
+        )
+
+        self.assertTrue(accepted)
+        self.assertTrue(ekf.last_external_measurement_accepted)
+        self.assertGreater(ekf.last_external_nis, 0.0)
+        self.assertGreater(ekf.pose[0], 0.9)
+        self.assertLess(ekf.pose[1], -1.8)
+        self.assertLess(ekf.covariance[0][0], covariance_before[0][0])
+        self.assertLess(ekf.covariance[1][1], covariance_before[1][1])
+
+    def test_pose_ekf_external_position_gate_rejects_inconsistent_candidate(self) -> None:
+        ekf = PoseEKF(
+            initial_position_variance_m2=0.01,
+            initial_heading_variance_rad2=0.25,
+            nis_gate_threshold=9.0,
+        )
+        ekf.update_wheel(0.0, x=0.0, y=0.0)
+        state_before = ekf.state[:]
+        covariance_before = [row[:] for row in ekf.covariance]
+
+        accepted = ekf.update_external_position(
+            1.0,
+            1.0,
+            [[0.001, 0.0], [0.0, 0.001]],
+        )
+
+        self.assertFalse(accepted)
+        self.assertFalse(ekf.last_external_measurement_accepted)
+        self.assertGreater(ekf.last_external_nis, 9.0)
+        self.assertEqual(ekf.state, state_before)
+        self.assertEqual(ekf.covariance, covariance_before)
+
+    def test_pose_ekf_external_position_uses_cross_covariance_to_update_bias(self) -> None:
+        ekf = PoseEKF(
+            initial_position_variance_m2=1.0,
+            initial_bias_variance_rad2_s2=1.0,
+            nis_gate_threshold=100.0,
+        )
+        ekf.update_wheel(0.0, x=0.0, y=0.0)
+        ekf.covariance[0][3] = 0.2
+        ekf.covariance[3][0] = 0.2
+
+        accepted = ekf.update_external_position(
+            0.5,
+            0.0,
+            [[0.04, 0.0], [0.0, 0.04]],
+        )
+
+        self.assertTrue(accepted)
+        self.assertNotEqual(ekf.bias_estimate, 0.0)
+
+    def test_pose_ekf_replays_delayed_external_position_at_measurement_time(self) -> None:
+        def build_filter() -> PoseEKF:
+            ekf = PoseEKF(
+                initial_position_variance_m2=1.0,
+                initial_heading_variance_rad2=0.25,
+                initial_bias_variance_rad2_s2=1.0,
+                nis_gate_threshold=9.0,
+                gyro_rate_noise_std_rad_s=0.0,
+                wheel_speed_noise_std_m_s=0.0,
+            )
+            ekf.update_wheel(0.0, x=0.0, y=0.0, linear_velocity_x=1.0, stamp=0.0)
+            ekf.update_gyro(0.0, 0.0)
+            ekf.update_gyro(0.0, 0.5)
+            return ekf
+
+        on_time = build_filter()
+        self.assertTrue(
+            on_time.update_external_position(
+                0.55,
+                0.0,
+                [[0.01, 0.0], [0.0, 0.01]],
+                measurement_stamp=0.5,
+            )
+        )
+        on_time.update_gyro(0.0, 1.0)
+
+        delayed = build_filter()
+        delayed.update_gyro(0.0, 1.0)
+        self.assertTrue(
+            delayed.update_external_position(
+                0.55,
+                0.0,
+                [[0.01, 0.0], [0.0, 0.01]],
+                measurement_stamp=0.5,
+            )
+        )
+
+        self.assertAlmostEqual(delayed.pose[0], on_time.pose[0], places=9)
+        self.assertAlmostEqual(delayed.pose[1], on_time.pose[1], places=9)
+        self.assertAlmostEqual(delayed.pose[2], on_time.pose[2], places=9)
+        self.assertGreater(delayed.last_external_measurement_age_s, 0.49)
+        self.assertTrue(delayed.last_external_measurement_replayed)
+
+    def test_pose_ekf_external_position_rejects_nonfinite_covariance(self) -> None:
+        ekf = PoseEKF()
+        ekf.update_wheel(0.0)
+        state_before = ekf.state[:]
+
+        accepted = ekf.update_external_position(
+            0.0,
+            0.0,
+            [[float("nan"), 0.0], [0.0, 1.0]],
+        )
+
+        self.assertFalse(accepted)
+        self.assertEqual(ekf.state, state_before)
+
 
 if __name__ == "__main__":
     unittest.main()

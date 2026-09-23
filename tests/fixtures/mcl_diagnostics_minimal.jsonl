@@ -1,0 +1,5 @@
+{"record_type":"config","config":{"particle_count":10}}
+{"record_type":"mcl_belief","status":"accepted","measurement_applied":true,"update_latency_s":0.25}
+{"record_type":"mcl_update","status":"accepted","update_latency_s":0.2,"effective_sample_size":8.0,"normalized_entropy":0.9,"valid_beam_count":12,"correction_m":0.03,"log_likelihood_gain":0.4,"resampled":true}
+{"record_type":"mcl_belief","status":"candidate_uncertainty_too_large","measurement_applied":false,"update_latency_s":0.45}
+{"record_type":"mcl_update","status":"insufficient_points","update_latency_s":0.4,"effective_sample_size":10.0,"normalized_entropy":1.0,"valid_beam_count":2,"correction_m":0.01,"log_likelihood_gain":-0.1,"resampled":false}

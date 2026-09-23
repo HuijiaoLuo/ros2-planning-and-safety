@@ -64,6 +64,12 @@ The current implementation includes:
   experiments with configuration values recorded in CSV output;
 - a gated LiDAR-to-static-map localizer with persistent `map → odom` state and
   diagnostic match-status topics;
+- a wheel/IMU-only `/state_prediction` stream kept separate from externally
+  corrected `/state_estimate` output;
+- a known-map Monte Carlo localization backend with particle covariance,
+  ambiguity, latency, and accepted-candidate diagnostics;
+- an independent point-to-point ICP map-registration baseline with auditable
+  correspondence, residual, convergence, and worker-latency diagnostics;
 - a covariance-aware pose EKF with x/y/yaw covariance, NIS gating, and
   wheel-measurement acceptance diagnostics;
 
@@ -128,16 +134,21 @@ The green goal marker is visible in Gazebo but excluded from the LiDAR
 visibility mask, so it is not treated as a physical obstacle.
 
 The baseline uses `/odom` for navigation. The state-estimation workstream
-additionally provides:
+additionally provides two distinct outputs:
 
 ```text
-/wheel_odom + /imu → heading_estimator → /state_estimate
+/wheel_odom + /imu → heading_estimator → /state_prediction
+                                      └→ /state_estimate
 ```
+
+`/state_prediction` is the wheel/IMU-only motion prior. `/state_estimate` may
+include delayed map-position observations, so it is not used as the high-rate
+control pose in the current localization experiments.
 
 An optional map-localization experiment adds a known-map position correction:
 
 ```text
-/state_estimate + /scan + /map
+/state_prediction + /scan + /map
         ↓
  lidar_localizer → persistent map→odom correction → /localized_estimate
 ```
@@ -152,29 +163,33 @@ broadcast it on TF, but remains diagnostic-only while its asynchronous match
 latency and acceptance gates are being validated. See
 [`docs/STATE_ESTIMATION.md`](docs/STATE_ESTIMATION.md),
 [`docs/POSE_EKF.md`](docs/POSE_EKF.md), and
-[`docs/LOCALIZATION.md`](docs/LOCALIZATION.md).
+[`docs/LOCALIZATION.md`](docs/LOCALIZATION.md). The independent registration
+baseline is documented in [`docs/ICP_LOCALIZATION.md`](docs/ICP_LOCALIZATION.md).
 
 The static occupancy grid is published in the `map` frame; in the baseline,
 `map` and Gazebo odometry are numerically aligned, while the optional localizer
 provides the standard `map → odom → base_link` transform.
 
-### Latest estimation evidence
+### Current diagnostic conclusion
 
-The current calibrated pose-EKF configuration uses propagated wheel speed,
-explicit slip uncertainty, wheel-yaw bias, a wheel-yaw NIS gate, and covariance
-logging. The latest localized-navigation trial finished with physical `/odom`
-error `0.0762 m`, independent `/state_estimate` error `0.0664 m`, and
-`/localized_estimate` error `0.0325 m`. Three LiDAR corrections were applied,
-with a maximum smoothed correction of `0.0225 m`; the run timed out without
-collision or sustained safety recovery.
+The frozen comparison showed that allowing external MCL corrections to drive
+`/state_estimate` increased the physical final error to about `0.108 m`. With
+the same external fusion enabled but control driven by the independent
+`/state_prediction`, the physical error was about `0.062 m`, matching the
+no-external-fusion ablation at about `0.060 m`.
 
-The result is interpreted as a model and integration diagnostic, not as a
-reason to keep tuning isolated weights. It shows a real estimated-goal versus
-physical-goal gap: the localizer improved the reported pose but did not yet
-provide a trustworthy closed-loop navigation source. The calibrated EKF,
-planner, and safety configuration are therefore frozen for the next multi-seed
-failure-propagation study. Existing replay, trace-diagnosis, observability,
-and score-consistency tools are used before any further algorithm change.
+The bounded terminal-recovery test entered `FINAL_APPROACH` and stopped safely
+after its finite distance budget; it did not falsely latch success. However,
+MCL still reported about `0.029 m` to the goal while physical `/odom` remained
+about `0.082 m` away. This is evidence of local-map ambiguity and motion-model
+error, not a reason to continue tuning thresholds.
+
+The current validation boundary is therefore frozen: high-rate control uses
+`/state_prediction`, external map corrections remain diagnostic, and physical
+completion is judged from `/odom`. The next model workstream is documented in
+[`docs/MCL_LOCALIZATION.md`](docs/MCL_LOCALIZATION.md) and
+[`docs/ICP_LOCALIZATION.md`](docs/ICP_LOCALIZATION.md); it is not yet claimed
+to be SLAM or a validated navigation replacement.
 
 The frozen numerical values are not claimed to be map-independent. A new map
 or maze is a validation input, not a reason to retune until it succeeds. The
@@ -182,12 +197,11 @@ generalization test keeps the estimator, matcher, controller, and safety
 configuration fixed while varying only the map and task, then classifies the
 failure layer from the recorded evidence.
 
-The next diagnostic layer records the temporal chain behind a terminal
-decision: source pose stamps, LiDAR stamps, logger receipt ages, controller
-events for entering and latching the goal tolerance, and the controller pose
-age embedded in each event. This makes it possible to distinguish estimator
-error, localization latency, stale state consumption, and premature terminal
-logic without changing the frozen estimator or matcher configuration.
+The diagnostic layer records source pose stamps, LiDAR stamps, logger receipt
+ages, controller state transitions, confirmation timeouts, and bounded final
+approach behavior. This separates estimator error, local-map ambiguity,
+control-pose selection, and terminal-state logic without hiding failures in
+parameter sweeps.
 
 ### State-estimation and localization status
 

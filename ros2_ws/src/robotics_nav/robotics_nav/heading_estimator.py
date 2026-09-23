@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import math
 from typing import Optional
 
@@ -59,6 +60,11 @@ class HeadingEstimator(Node):
         self.declare_parameter("wheel_odom_topic", "/wheel_odom")
         self.declare_parameter("imu_topic", "/imu")
         self.declare_parameter("output_topic", "/state_estimate")
+        self.declare_parameter("motion_prior_topic", "/state_prediction")
+        self.declare_parameter("external_position_fusion", False)
+        self.declare_parameter(
+            "external_position_topic", "/localization_candidate"
+        )
         self.declare_parameter("fusion_mode", "fixed")
         self.declare_parameter("wheel_weight", 0.02)
         self.declare_parameter("gyro_rate_noise_std_rad_s", 0.01)
@@ -102,6 +108,15 @@ class HeadingEstimator(Node):
         wheel_topic = str(self.get_parameter("wheel_odom_topic").value)
         imu_topic = str(self.get_parameter("imu_topic").value)
         output_topic = str(self.get_parameter("output_topic").value)
+        motion_prior_topic = str(
+            self.get_parameter("motion_prior_topic").value
+        ).strip()
+        external_position_fusion = parameter_bool(
+            self.get_parameter("external_position_fusion").value
+        )
+        external_position_topic = str(
+            self.get_parameter("external_position_topic").value
+        )
         fusion_mode = str(self.get_parameter("fusion_mode").value).lower()
         wheel_weight = float(self.get_parameter("wheel_weight").value)
         gyro_rate_noise = float(
@@ -205,6 +220,15 @@ class HeadingEstimator(Node):
         else:
             raise ValueError("fusion_mode must be 'fixed', 'adaptive', or 'ekf'")
         self.fusion_mode = fusion_mode
+        # The navigation estimate may receive delayed absolute position
+        # observations from a map localizer.  Keep a second EKF instance for
+        # the motion prior so the localizer never feeds its own correction
+        # back into the next particle prediction.  This is a structural
+        # separation: both filters consume the same wheel/IMU stream, but only
+        # ``self.fusion`` consumes external map-position events.
+        self.motion_prior_fusion: Optional[PoseEKF] = (
+            copy.deepcopy(self.fusion) if fusion_mode == "ekf" else None
+        )
         # These perturbations are injected at the estimator input boundary.  In
         # particular, /odom is never used to create the navigation estimate.
         self.gyro_model = GyroMeasurementModel(
@@ -221,6 +245,12 @@ class HeadingEstimator(Node):
         self.last_status: Optional[str] = None
 
         self.publisher = self.create_publisher(Odometry, output_topic, 10)
+        self.motion_prior_publisher = (
+            self.create_publisher(Odometry, motion_prior_topic, 10)
+            if motion_prior_topic
+            else None
+        )
+        self.motion_prior_topic = motion_prior_topic
         self.gain_publisher = self.create_publisher(
             Float64,
             str(self.get_parameter("fusion_gain_topic").value),
@@ -256,6 +286,26 @@ class HeadingEstimator(Node):
             str(self.get_parameter("heading_measurement_accepted_topic").value),
             10,
         )
+        self.external_nis_publisher = self.create_publisher(
+            Float64,
+            "/external_position_fusion_nis",
+            10,
+        )
+        self.external_measurement_accepted_publisher = self.create_publisher(
+            Bool,
+            "/external_position_measurement_accepted",
+            10,
+        )
+        self.external_measurement_age_publisher = self.create_publisher(
+            Float64,
+            "/external_position_measurement_age_s",
+            10,
+        )
+        self.external_measurement_replayed_publisher = self.create_publisher(
+            Bool,
+            "/external_position_measurement_replayed",
+            10,
+        )
         self.create_subscription(
             Odometry,
             wheel_topic,
@@ -268,6 +318,13 @@ class HeadingEstimator(Node):
             self.imu_callback,
             qos_profile_sensor_data,
         )
+        if external_position_fusion and fusion_mode == "ekf":
+            self.create_subscription(
+                Odometry,
+                external_position_topic,
+                self.external_position_callback,
+                qos_profile_sensor_data,
+            )
         self.timer = self.create_timer(1.0 / publish_rate, self.publish_estimate)
 
         self.get_logger().info(
@@ -288,7 +345,9 @@ class HeadingEstimator(Node):
             f"initial_gyro_bias={initial_gyro_bias:.4f} rad/s, "
             f"gyro_noise_std={gyro_noise:.4f} rad/s, seed={gyro_seed}, "
             f"wheel_slip_ratio={wheel_slip_ratio:.3f}."
-            f" position_mode={position_mode}."
+            f" position_mode={position_mode}, "
+            f"motion_prior_topic={motion_prior_topic}, "
+            f"external_position_fusion={external_position_fusion}."
         )
 
     def report_status(self, status: str) -> None:
@@ -324,7 +383,16 @@ class HeadingEstimator(Node):
                 x=position.x,
                 y=position.y,
                 linear_velocity_x=message.twist.twist.linear.x,
+                stamp=stamp_seconds(message),
             )
+            if self.motion_prior_fusion is not None:
+                self.motion_prior_fusion.update_wheel(
+                    wheel_pose[2],
+                    x=position.x,
+                    y=position.y,
+                    linear_velocity_x=message.twist.twist.linear.x,
+                    stamp=stamp_seconds(message),
+                )
         else:
             self.latest_fused_yaw = self.fusion.update_wheel(wheel_pose[2])
         if self.fusion_mode == "ekf":
@@ -347,14 +415,81 @@ class HeadingEstimator(Node):
         # The orientation quaternion in sensor_msgs/Imu is deliberately
         # ignored; using it would make the simulated perfect orientation a
         # hidden ground-truth input.
-        fused_yaw = self.fusion.update_gyro(
-            self.gyro_model.apply(message.angular_velocity.z),
-            stamp_seconds(message),
-        )
+        measured_rate = self.gyro_model.apply(message.angular_velocity.z)
+        imu_stamp = stamp_seconds(message)
+        fused_yaw = self.fusion.update_gyro(measured_rate, imu_stamp)
+        if self.motion_prior_fusion is not None:
+            self.motion_prior_fusion.update_gyro(measured_rate, imu_stamp)
         if fused_yaw is not None:
             self.latest_fused_yaw = fused_yaw
             if self.fusion_mode == "ekf":
                 self.latest_wheel_pose = self.fusion.pose
+
+    def external_position_callback(self, message: Odometry) -> None:
+        """Fuse one accepted map-localizer event into the pose EKF.
+
+        The MCL node publishes this topic once per accepted scan update.  It
+        is intentionally not the repeated ``/localized_estimate`` fallback
+        stream.  The position covariance is copied from the candidate message
+        and is therefore part of the measurement model, not a hand-tuned
+        correction factor.
+        """
+        if self.fusion_mode != "ekf":
+            return
+        covariance = message.pose.covariance
+        if len(covariance) < 8:
+            return
+        accepted = self.fusion.update_external_position(
+            float(message.pose.pose.position.x),
+            float(message.pose.pose.position.y),
+            [
+                [float(covariance[0]), float(covariance[1])],
+                [float(covariance[6]), float(covariance[7])],
+            ],
+            measurement_stamp=stamp_seconds(message),
+        )
+        self.external_nis_publisher.publish(
+            Float64(data=float(self.fusion.last_external_nis))
+        )
+        self.external_measurement_accepted_publisher.publish(
+            Bool(data=bool(accepted))
+        )
+        self.external_measurement_age_publisher.publish(
+            Float64(data=float(self.fusion.last_external_measurement_age_s))
+        )
+        self.external_measurement_replayed_publisher.publish(
+            Bool(data=bool(self.fusion.last_external_measurement_replayed))
+        )
+        if accepted:
+            # The external update changes the internal EKF state between IMU
+            # callbacks.  Refresh the cached pose immediately so the next
+            # output message exposes the corrected state.
+            self.latest_fused_yaw = self.fusion.pose[2]
+            self.latest_wheel_pose = self.fusion.pose
+
+    def make_odometry_message(
+        self,
+        pose: tuple[float, float, float],
+        covariance: list[float],
+    ) -> Odometry:
+        """Build an odometry message without changing its source semantics."""
+        estimate = Odometry()
+        estimate.header = self.latest_wheel_odom.header
+        estimate.header.frame_id = self.latest_wheel_odom.header.frame_id or "odom"
+        estimate.child_frame_id = self.latest_wheel_odom.child_frame_id or "base_link"
+        estimate.pose.pose.position.x = pose[0]
+        estimate.pose.pose.position.y = pose[1]
+        estimate.pose.pose.position.z = self.latest_wheel_odom.pose.pose.position.z
+        (
+            estimate.pose.pose.orientation.x,
+            estimate.pose.pose.orientation.y,
+            estimate.pose.pose.orientation.z,
+            estimate.pose.pose.orientation.w,
+        ) = quaternion_from_yaw(wrap_angle(pose[2]))
+        estimate.twist = self.latest_wheel_odom.twist
+        estimate.pose.covariance = list(covariance)
+        estimate.twist.covariance = self.latest_wheel_odom.twist.covariance
+        return estimate
 
     def publish_estimate(self) -> None:
         """Publish the current estimated pose and fusion diagnostics."""
@@ -367,23 +502,27 @@ class HeadingEstimator(Node):
         # Position comes from the selected wheel model; orientation comes from
         # the fixed/adaptive heading fusion state.  The message remains an
         # Odometry-shaped interface so the existing follower can consume it.
-        estimate = Odometry()
-        estimate.header = self.latest_wheel_odom.header
-        estimate.header.frame_id = self.latest_wheel_odom.header.frame_id or "odom"
-        estimate.child_frame_id = self.latest_wheel_odom.child_frame_id or "base_link"
-        estimate.pose.pose.position.x = self.latest_wheel_pose[0]
-        estimate.pose.pose.position.y = self.latest_wheel_pose[1]
-        estimate.pose.pose.position.z = self.latest_wheel_odom.pose.pose.position.z
-        estimate.pose.pose.orientation.x, estimate.pose.pose.orientation.y, estimate.pose.pose.orientation.z, estimate.pose.pose.orientation.w = quaternion_from_yaw(  # noqa: E501
-            wrap_angle(self.latest_fused_yaw)
-        )
-        estimate.twist = self.latest_wheel_odom.twist
         if self.fusion_mode == "ekf":
-            estimate.pose.covariance = self.fusion.pose_covariance_6x6
+            estimate_pose = self.fusion.pose
+            estimate_covariance = self.fusion.pose_covariance_6x6
         else:
-            estimate.pose.covariance = self.latest_wheel_odom.pose.covariance
-        estimate.twist.covariance = self.latest_wheel_odom.twist.covariance
+            estimate_pose = self.latest_wheel_pose
+            estimate_covariance = self.latest_wheel_odom.pose.covariance
+        estimate = self.make_odometry_message(estimate_pose, estimate_covariance)
         self.publisher.publish(estimate)
+        if self.motion_prior_publisher is not None:
+            if self.motion_prior_fusion is not None and self.motion_prior_fusion.ready:
+                prior_pose = self.motion_prior_fusion.pose
+                prior_covariance = self.motion_prior_fusion.pose_covariance_6x6
+            else:
+                # Fixed/adaptive V3 modes have no separate position EKF.  In
+                # those modes the published motion prior is simply the same
+                # wheel/IMU estimate, preserving the old behavior.
+                prior_pose = estimate_pose
+                prior_covariance = estimate_covariance
+            self.motion_prior_publisher.publish(
+                self.make_odometry_message(prior_pose, prior_covariance)
+            )
         self.gain_publisher.publish(Float64(data=float(self.fusion.last_gain)))
         self.bias_publisher.publish(
             Float64(data=float(self.fusion.bias_estimate))

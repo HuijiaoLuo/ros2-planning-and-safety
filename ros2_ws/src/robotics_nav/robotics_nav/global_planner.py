@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import heapq
 import math
 from typing import Optional
@@ -89,6 +90,11 @@ class GlobalPlanner(Node):
         self.latest_map: Optional[OccupancyGrid] = None
         self.latest_odom: Optional[Odometry] = None
         self.last_reported_signature: Optional[tuple[Cell, Cell]] = None
+        # Keep the last geometrically valid route so a one-cell estimate jump
+        # does not turn a continuous control problem into an immediate empty
+        # path.  This is only a short continuity fallback: the raw occupancy
+        # cell and the safety supervisor still decide whether motion is safe.
+        self.last_valid_path: Optional[Path] = None
 
         self.get_logger().info(
             "Planning clearance: "
@@ -110,10 +116,14 @@ class GlobalPlanner(Node):
         """Replan when both map and pose are available and the start moved.
 
         The planner works in map-grid coordinates, while odometry arrives in
-        world coordinates. An empty path is published for invalid or
-        unreachable endpoints so downstream nodes do not keep following a
-        stale route. The signature check avoids republishing identical plans
-        on every odometry callback.
+        world coordinates. A small state-estimate change can cross an
+        inflated-cell boundary even when the physical pose is still close to
+        the active route. In that case, retaining the last valid route is
+        safer for control continuity than converting one discrete transition
+        into an immediate stop. The fallback is rejected when the raw map
+        cell is occupied, the pose is out of bounds, or the pose has moved
+        away from the previous route. The signature check avoids republishing
+        identical plans on every odometry callback.
         """
         if self.latest_map is None or self.latest_odom is None:
             return
@@ -133,10 +143,19 @@ class GlobalPlanner(Node):
         inflated = self.inflate_obstacles(grid)
         path = self.astar(grid, inflated, start, goal)
         if path is None:
-            self.get_logger().warn(
-                f"No path found from {start} to {goal}; publishing an empty path."
-            )
-            self.publish_empty_path(grid)
+            if self.can_hold_last_valid_path(grid, position.x, position.y, start):
+                self.get_logger().warn(
+                    f"No inflated-grid path from {start} to {goal}; "
+                    "raw cell is free and pose remains near the previous "
+                    "route, retaining the last valid path."
+                )
+                self.publish_cached_path(grid)
+            else:
+                self.get_logger().warn(
+                    f"No path found from {start} to {goal}; "
+                    "publishing an empty path."
+                )
+                self.publish_empty_path(grid)
         else:
             self.get_logger().info(
                 f"A* path found: {len(path) - 1} grid steps from {start} to {goal}."
@@ -260,6 +279,38 @@ class GlobalPlanner(Node):
 
         return None
 
+    def can_hold_last_valid_path(
+        self,
+        grid: OccupancyGrid,
+        x: float,
+        y: float,
+        start: Cell,
+    ) -> bool:
+        """Return whether a transient planning failure may reuse the route.
+
+        A* operates on an inflated grid, while the safety supervisor checks
+        the live LiDAR clearance.  A pose estimate can therefore move from a
+        free corridor cell to an inflated boundary cell without the robot
+        actually entering an occupied map cell.  Reusing the last route is
+        allowed only for that narrow case: the raw cell must be free and the
+        current pose must remain within two map cells of the previous route.
+        The distance is derived from the map resolution rather than exposed
+        as another tuning parameter.
+        """
+        if self.last_valid_path is None or not self.last_valid_path.poses:
+            return False
+        if self.cell_is_occupied(grid, start):
+            return False
+
+        max_route_distance = 2.0 * float(grid.info.resolution)
+        max_route_distance_sq = max_route_distance * max_route_distance
+        return any(
+            (pose.pose.position.x - x) ** 2
+            + (pose.pose.position.y - y) ** 2
+            <= max_route_distance_sq
+            for pose in self.last_valid_path.poses
+        )
+
     @staticmethod
     def manhattan(a: Cell, b: Cell) -> float:
         return float(abs(a[0] - b[0]) + abs(a[1] - b[1]))
@@ -332,6 +383,19 @@ class GlobalPlanner(Node):
                 ) * grid.info.resolution
             pose.pose.orientation.w = 1.0
             message.poses.append(pose)
+        self.last_valid_path = copy.deepcopy(message)
+        self.path_publisher.publish(message)
+
+    def publish_cached_path(self, grid: OccupancyGrid) -> None:
+        """Republish the last valid path with a fresh receipt timestamp."""
+        if self.last_valid_path is None:
+            self.publish_empty_path(grid)
+            return
+        message = copy.deepcopy(self.last_valid_path)
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.header.frame_id = grid.header.frame_id or message.header.frame_id
+        for pose in message.poses:
+            pose.header = message.header
         self.path_publisher.publish(message)
 
     def publish_empty_path(self, grid: OccupancyGrid) -> None:

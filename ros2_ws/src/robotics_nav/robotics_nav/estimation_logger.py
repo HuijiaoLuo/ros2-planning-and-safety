@@ -81,6 +81,7 @@ class EstimationLogger(Node):
         self.declare_parameter("configured_position_mode", "wheel_pose")
         self.declare_parameter("configured_wheel_weight", 0.02)
         self.declare_parameter("configured_fusion_mode", "fixed")
+        self.declare_parameter("configured_external_position_fusion", False)
         self.declare_parameter("configured_gyro_rate_noise_std_rad_s", 0.01)
         self.declare_parameter("configured_wheel_yaw_noise_std_rad", 0.07)
         self.declare_parameter("configured_gyro_bias_mode", "estimated")
@@ -144,6 +145,9 @@ class EstimationLogger(Node):
         )
         self.configured_fusion_mode = str(
             self.get_parameter("configured_fusion_mode").value
+        )
+        self.configured_external_position_fusion = parameter_bool(
+            self.get_parameter("configured_external_position_fusion").value
         )
         self.configured_gyro_rate_noise = float(
             self.get_parameter("configured_gyro_rate_noise_std_rad_s").value
@@ -217,6 +221,13 @@ class EstimationLogger(Node):
         self.latest_wheel_yaw_noise: Optional[float] = None
         self.latest_nis: Optional[float] = None
         self.latest_measurement_accepted = True
+        self.latest_external_nis: Optional[float] = None
+        self.latest_external_measurement_age_s: Optional[float] = None
+        self.external_nis_values: list[float] = []
+        self.external_measurement_age_values: list[float] = []
+        self.external_position_update_count = 0
+        self.external_position_update_accepted_count = 0
+        self.external_measurement_replayed_count = 0
         self.fusion_gain_values: list[float] = []
         self.wheel_yaw_noise_values: list[float] = []
         self.nis_values: list[float] = []
@@ -299,6 +310,30 @@ class EstimationLogger(Node):
             10,
         )
         self.create_subscription(
+            Float64,
+            "/external_position_fusion_nis",
+            self.external_nis_callback,
+            10,
+        )
+        self.create_subscription(
+            Bool,
+            "/external_position_measurement_accepted",
+            self.external_measurement_accepted_callback,
+            10,
+        )
+        self.create_subscription(
+            Float64,
+            "/external_position_measurement_age_s",
+            self.external_measurement_age_callback,
+            10,
+        )
+        self.create_subscription(
+            Bool,
+            "/external_position_measurement_replayed",
+            self.external_measurement_replayed_callback,
+            10,
+        )
+        self.create_subscription(
             Bool,
             "/heading_measurement_accepted",
             self.measurement_accepted_callback,
@@ -378,6 +413,29 @@ class EstimationLogger(Node):
     def nis_callback(self, message: Float64) -> None:
         self.latest_nis = float(message.data)
         self.nis_values.append(self.latest_nis)
+
+    def external_nis_callback(self, message: Float64) -> None:
+        """Record one NIS value for an external map-position event."""
+        self.latest_external_nis = float(message.data)
+        self.external_nis_values.append(self.latest_external_nis)
+
+    def external_measurement_accepted_callback(self, message: Bool) -> None:
+        """Count each external-position event emitted by the coupled EKF."""
+        self.external_position_update_count += 1
+        if bool(message.data):
+            self.external_position_update_accepted_count += 1
+
+    def external_measurement_age_callback(self, message: Float64) -> None:
+        """Record the delay between map observation time and filter time."""
+        self.latest_external_measurement_age_s = float(message.data)
+        self.external_measurement_age_values.append(
+            self.latest_external_measurement_age_s
+        )
+
+    def external_measurement_replayed_callback(self, message: Bool) -> None:
+        """Count external events handled by timestamped history replay."""
+        if bool(message.data):
+            self.external_measurement_replayed_count += 1
 
     def measurement_accepted_callback(self, message: Bool) -> None:
         accepted = bool(message.data)
@@ -712,6 +770,39 @@ class EstimationLogger(Node):
             and abs(sum(self.motion_speed_truth_values)) > 1.0e-6
             else None
         )
+        result["external_position_update_samples"] = (
+            self.external_position_update_count
+        )
+        result["external_position_update_accepted_count"] = (
+            self.external_position_update_accepted_count
+        )
+        result["external_position_update_rejected_count"] = (
+            self.external_position_update_count
+            - self.external_position_update_accepted_count
+        )
+        result["external_position_nis_samples"] = len(self.external_nis_values)
+        result["external_position_nis_mean"] = (
+            sum(self.external_nis_values) / len(self.external_nis_values)
+            if self.external_nis_values
+            else None
+        )
+        result["external_position_nis_max"] = (
+            max(self.external_nis_values) if self.external_nis_values else None
+        )
+        result["external_measurement_age_mean_s"] = (
+            sum(self.external_measurement_age_values)
+            / len(self.external_measurement_age_values)
+            if self.external_measurement_age_values
+            else None
+        )
+        result["external_measurement_age_max_s"] = (
+            max(self.external_measurement_age_values)
+            if self.external_measurement_age_values
+            else None
+        )
+        result["external_measurement_replayed_count"] = (
+            self.external_measurement_replayed_count
+        )
         return result
 
     def write_report(self) -> None:
@@ -729,6 +820,9 @@ class EstimationLogger(Node):
             "configured_position_mode": self.configured_position_mode,
             "configured_wheel_weight": self.configured_wheel_weight,
             "configured_fusion_mode": self.configured_fusion_mode,
+            "configured_external_position_fusion": (
+                self.configured_external_position_fusion
+            ),
             "configured_gyro_rate_noise_std_rad_s": self.configured_gyro_rate_noise,
             "configured_wheel_yaw_noise_std_rad": self.configured_wheel_yaw_noise,
             "configured_gyro_bias_mode": self.configured_gyro_bias_mode,

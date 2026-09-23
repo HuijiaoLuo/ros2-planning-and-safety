@@ -520,8 +520,8 @@ ros2 launch robotics_sim sim.launch.py \
   position_mode:=propagated \
   planning_radius_m:=0.41 \
   experiment_timeout_s:=120.0 \
-  estimation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v4_ekf_covariance_metrics.csv \
-  estimation_trace_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v4_ekf_covariance_trace.csv
+  estimation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/ekf_covariance_metrics.csv \
+  estimation_trace_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/ekf_covariance_trace.csv
 ```
 
 Each trace row contains the `/odom` evaluation error, the EKF x/y/yaw
@@ -534,8 +534,8 @@ Summarize one or more traces with:
 
 ```bash
 python tools/summarize_covariance_calibration.py \
-  --glob "results/v4_ekf_*_trace.csv" \
-  --output results/v4_ekf_covariance_calibration.csv
+  --glob "results/ekf_*_trace.csv" \
+  --output results/ekf_covariance_calibration.csv
 ```
 
 The reported position value is the **raw joint NEES** for the two-dimensional
@@ -565,8 +565,8 @@ ros2 launch robotics_sim sim.launch.py \
   nis_gate_threshold:=9.0 \
   planning_radius_m:=0.41 \
   experiment_timeout_s:=120.0 \
-  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v4_ekf_smoke_eval.csv \
-  estimation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/v4_ekf_smoke_metrics.csv
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/ekf_smoke_eval.csv \
+  estimation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/ekf_smoke_metrics.csv
 ```
 
 The next controlled comparison keeps the mean slip at

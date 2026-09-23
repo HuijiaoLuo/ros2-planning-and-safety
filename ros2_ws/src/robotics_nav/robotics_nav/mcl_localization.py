@@ -1,7 +1,7 @@
-"""Dependency-free Monte Carlo localization primitives for the V5 backend.
+"""Dependency-free Monte Carlo localization primitives.
 
-The V4 localizer selects one nearby pose with a deterministic grid search.  V5
-keeps several pose hypotheses instead.  Wheel/IMU motion is used as a prior,
+The deterministic localizer selects one nearby pose with a grid search.  This
+model keeps several pose hypotheses instead.  Wheel/IMU motion is used as a prior,
 and a likelihood-field LiDAR model assigns each particle a weight from the
 known occupancy map.  This module intentionally has no ROS imports so that the
 motion model, likelihood model, resampling, and covariance calculation can be
@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Iterable, Sequence
 
 
@@ -111,9 +112,14 @@ class OccupancyGridMap:
             occupied_cells=occupied,
         )
 
-    @property
+    @cached_property
     def occupied_centres(self) -> tuple[tuple[float, float], ...]:
-        """Return occupied-cell centres in world coordinates."""
+        """Return cached occupied-cell centres in world coordinates.
+
+        LiDAR likelihood evaluation queries this set once per particle and
+        beam.  Caching the static map geometry keeps the model unchanged while
+        avoiding repeated coordinate allocation in the hot loop.
+        """
 
         return tuple(
             (
@@ -122,6 +128,30 @@ class OccupancyGridMap:
             )
             for column, row in self.occupied_cells
         )
+
+    @cached_property
+    def occupied_distance_field_m(self) -> tuple[float, ...]:
+        """Precompute the static cell-to-obstacle distance field.
+
+        The likelihood-field model only needs the distance at an endpoint's
+        map cell.  Computing that distance once per map cell avoids scanning
+        every occupied cell for every particle and LiDAR beam.  The result is
+        still the same nearest-occupied-centre model evaluated on the map
+        raster, with the rasterization error made explicit and repeatable.
+        """
+
+        centres = self.occupied_centres
+        if not centres:
+            return tuple(math.inf for _ in range(self.width * self.height))
+        distances: list[float] = []
+        for row in range(self.height):
+            y = self.origin_y_m + (row + 0.5) * self.resolution_m
+            for column in range(self.width):
+                x = self.origin_x_m + (column + 0.5) * self.resolution_m
+                distances.append(
+                    min(math.hypot(x - cx, y - cy) for cx, cy in centres)
+                )
+        return tuple(distances)
 
     def world_to_cell(self, x: float, y: float) -> tuple[int, int] | None:
         """Convert a world point to a map cell, returning ``None`` outside."""
@@ -139,17 +169,13 @@ class OccupancyGridMap:
         return cell is not None and cell not in self.occupied_cells
 
     def nearest_occupied_distance_m(self, x: float, y: float) -> float:
-        """Return the distance to the nearest occupied-cell centre.
+        """Return the cached likelihood-field distance for a world point."""
 
-        The first implementation deliberately uses a transparent linear scan.
-        The ROS adapter can later replace this with a cached distance field
-        without changing the particle-filter equations or test interface.
-        """
-
-        centres = self.occupied_centres
-        if not centres:
+        cell = self.world_to_cell(x, y)
+        if cell is None:
             return math.inf
-        return min(math.hypot(x - cx, y - cy) for cx, cy in centres)
+        column, row = cell
+        return self.occupied_distance_field_m[row * self.width + column]
 
 
 @dataclass(frozen=True)
@@ -173,6 +199,27 @@ class MCLMeasurementResult:
     normalized_entropy: float
     valid_beam_count: int
     resampled: bool
+
+
+@dataclass(frozen=True)
+class MCLScanObservation:
+    """One scan expressed relative to the current particle time.
+
+    ``relative_*`` is the odometry-frame transform from the scan pose to the
+    current pose.  The filter inverts that transform for each current particle
+    before evaluating the historical scan, so a short scan window contributes
+    time-consistent evidence instead of treating old returns as if they were
+    measured at the current pose.
+    """
+
+    ranges_m: tuple[float, ...]
+    angle_min_rad: float
+    angle_increment_rad: float
+    range_min_m: float
+    range_max_m: float
+    relative_x_m: float = 0.0
+    relative_y_m: float = 0.0
+    relative_yaw_rad: float = 0.0
 
 
 class ParticleFilter2D:
@@ -339,6 +386,63 @@ class ParticleFilter2D:
             return math.log(floor), 0
         return log_likelihood / valid_count, valid_count
 
+    @staticmethod
+    def scan_pose_from_current_particle(
+        particle_pose: Pose2D,
+        observation: MCLScanObservation,
+    ) -> Pose2D:
+        """Recover a historical scan pose from a current particle pose.
+
+        The observation transform maps the historical scan frame into the
+        current odometry frame.  Applying its inverse keeps the LiDAR endpoint
+        geometry aligned when several scans are scored together.
+        """
+
+        dx = observation.relative_x_m
+        dy = observation.relative_y_m
+        dyaw = observation.relative_yaw_rad
+        cos_inv = math.cos(dyaw)
+        sin_inv = math.sin(dyaw)
+        inverse_x = -(cos_inv * dx + sin_inv * dy)
+        inverse_y = sin_inv * dx - cos_inv * dy
+        x, y, yaw = particle_pose
+        scan_x = x + math.cos(yaw) * inverse_x - math.sin(yaw) * inverse_y
+        scan_y = y + math.sin(yaw) * inverse_x + math.cos(yaw) * inverse_y
+        return scan_x, scan_y, wrap_angle(yaw - dyaw)
+
+    def pose_log_likelihood_sequence(
+        self,
+        pose: Pose2D,
+        observations: Sequence[MCLScanObservation],
+    ) -> tuple[float, int]:
+        """Accumulate independent scan evidence in the log domain.
+
+        ``pose_log_likelihood`` returns a per-scan mean log likelihood so a
+        single scan is not rewarded merely for having more valid beams. A
+        temporal window contains separate observations, however, so their
+        normalized scan likelihoods are multiplied. The product is computed
+        as a sum of log likelihoods; a window of one therefore preserves the
+        original single-scan update exactly.
+        """
+
+        if not observations:
+            return math.log(self.config.lidar_likelihood_floor), 0
+        accumulated_log_likelihood = 0.0
+        total_valid_count = 0
+        for observation in observations:
+            scan_pose = self.scan_pose_from_current_particle(pose, observation)
+            log_likelihood, valid_count = self.pose_log_likelihood(
+                scan_pose,
+                observation.ranges_m,
+                angle_min_rad=observation.angle_min_rad,
+                angle_increment_rad=observation.angle_increment_rad,
+                range_min_m=observation.range_min_m,
+                range_max_m=observation.range_max_m,
+            )
+            accumulated_log_likelihood += log_likelihood
+            total_valid_count += valid_count
+        return accumulated_log_likelihood, total_valid_count
+
     def update(
         self,
         ranges_m: Sequence[float],
@@ -348,21 +452,55 @@ class ParticleFilter2D:
         range_min_m: float,
         range_max_m: float,
     ) -> MCLMeasurementResult:
-        """Apply a LiDAR update, then resample only when ESS requires it."""
+        """Apply one LiDAR update through the temporal-window implementation."""
 
+        return self.update_sequence(
+            [
+                MCLScanObservation(
+                    ranges_m=tuple(float(value) for value in ranges_m),
+                    angle_min_rad=angle_min_rad,
+                    angle_increment_rad=angle_increment_rad,
+                    range_min_m=range_min_m,
+                    range_max_m=range_max_m,
+                )
+            ]
+        )
+
+    def update_sequence(
+        self,
+        observations: Sequence[MCLScanObservation],
+    ) -> MCLMeasurementResult:
+        """Apply a joint short-window LiDAR update.
+
+        The prior weight is multiplied by the product of the per-scan
+        likelihood blocks. In log space this is the sum of the independent,
+        time-consistent scan log likelihoods. A single-scan call is unchanged,
+        while a window accumulates independent geometric evidence without
+        changing the configured uncertainty gate.
+        """
+
+        if not observations:
+            raise ValueError("observations must not be empty")
+
+        # Beam validity depends on the scan limits, not on the particle pose.
+        # Keep this count separate from the likelihood loop so diagnostics
+        # report the amount of temporal evidence supplied to the update.
+        valid_beam_count = sum(
+            sum(
+                1
+                for range_m in observation.ranges_m
+                if math.isfinite(range_m)
+                and observation.range_min_m < range_m < observation.range_max_m
+            )
+            for observation in observations
+        )
         log_weights: list[float] = []
-        valid_beam_count = 0
         for particle in self.particles:
-            log_likelihood, valid_count = self.pose_log_likelihood(
+            log_likelihood, _valid_count = self.pose_log_likelihood_sequence(
                 (particle.x_m, particle.y_m, particle.yaw_rad),
-                ranges_m,
-                angle_min_rad=angle_min_rad,
-                angle_increment_rad=angle_increment_rad,
-                range_min_m=range_min_m,
-                range_max_m=range_max_m,
+                observations,
             )
             log_weights.append(math.log(max(particle.weight, 1.0e-300)) + log_likelihood)
-            valid_beam_count = max(valid_beam_count, valid_count)
 
         maximum = max(log_weights)
         raw_weights = [math.exp(value - maximum) for value in log_weights]

@@ -27,6 +27,8 @@ setup(
             "path_follower = robotics_nav.path_follower:main",
             "heading_estimator = robotics_nav.heading_estimator:main",
             "lidar_localizer = robotics_nav.lidar_localizer:main",
+            "mcl_localizer = robotics_nav.mcl_localizer:main",
+            "icp_localizer = robotics_nav.icp_localizer:main",
             "estimation_logger = robotics_nav.estimation_logger:main",
             "safety_supervisor = robotics_nav.safety_supervisor:main",
             "static_map_publisher = robotics_nav.static_map_publisher:main",
