@@ -34,8 +34,10 @@ in baseline and L-corridor scenes. With `fusion_mode:=ekf`,
 `position_mode:=propagated`, `gyro_bias_mode:=fixed`, and
 `wheel_yaw_noise_std_rad:=0.20`, seed-0 state error fell to `0.016 m` and
 `0.048 m`, and both runs reached the physical goal. This configuration is a
-candidate estimator/control prior, not yet a frozen default; three-seed
-validation is still required.
+validated estimator/control prior: the follow-up three-seed matrix completed
+all `6/6` baseline/L-corridor runs successfully, with mean final state errors
+of `0.0160 m` and `0.0435 m`. The source defaults are still unchanged until
+this configuration is explicitly promoted.
 
 Consequently, parameter changes are treated as controlled experiments rather
 than open-ended tuning. The calibrated EKF, safety policy, and high-rate

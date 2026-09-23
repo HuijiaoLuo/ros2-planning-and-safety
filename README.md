@@ -80,8 +80,10 @@ baseline obstacle and L-corridor scenes reached `0/9`; their common
 diagnostic evidence for the original fixed-fusion configuration. A controlled
 v4 run with `ekf + propagated`, fixed zero gyro bias, and `0.20 rad` wheel-yaw
 noise reduced the seed-0 state error to `0.016 m` in baseline and `0.048 m` in
-the L-corridor, with both runs reaching the goal. Three-seed validation is
-still pending before changing defaults. The visual replay guide is in
+the L-corridor, with both runs reaching the goal. The follow-up three-seed
+validation completed `6/6` runs successfully, with mean final state errors of
+`0.0160 m` and `0.0435 m`. The source defaults remain unchanged until this
+validated candidate is explicitly promoted. The visual replay guide is in
 [`docs/assets/README.md`](docs/assets/README.md).
 
 ## Quick start
@@ -235,10 +237,11 @@ docs/                  Focused estimation and localization notes
 
 ## Next step
 
-The immediate next step is to determine whether the roughly `0.2 m` detour
-drift comes from wheel-yaw anchoring or from the wheel-position model. Only
-after that A/B comparison should the default estimator or localization gates
-be changed.
+The wheel/state-estimation A/B is now validated across three seeds: the EKF
+with propagated position, fixed zero gyro bias, and `0.20 rad` wheel-yaw noise
+removed the detour drift in both tested scenes. The next implementation step
+is to promote this configuration deliberately, while keeping localization
+gates experimental and `/odom` as the validated reference.
 
 ## License
 
