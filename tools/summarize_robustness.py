@@ -71,12 +71,19 @@ def bool_value(row: dict[str, str], name: str) -> bool:
     return row.get(name, "").strip().lower() == "true"
 
 
+def completed_success(row: dict[str, str]) -> bool:
+    """Prefer explicit controller completion over legacy success semantics."""
+    if "controller_goal_latched" in row:
+        return bool_value(row, "controller_goal_latched")
+    return bool_value(row, "success")
+
+
 def termination_reason(row: dict[str, str]) -> str:
     """Return an explicit reason, with a safe fallback for legacy reports."""
     value = row.get("termination_reason", "").strip()
     if value:
         return value
-    return "goal_reached" if bool_value(row, "success") else "unknown"
+    return "goal_reached" if completed_success(row) else "unknown"
 
 
 def normalized_config(row: dict[str, str]) -> tuple[float, ...]:
@@ -101,7 +108,7 @@ def summary_for_rows(rows: list[dict[str, str]]) -> dict[str, object]:
         raise ValueError("Cannot summarize an empty group")
 
     config = normalized_config(rows[0])
-    successes = sum(bool_value(row, "success") for row in rows)
+    successes = sum(completed_success(row) for row in rows)
     termination_counts = Counter(termination_reason(row) for row in rows)
     collision_values = [
         row.get("collision", "").strip().lower()
@@ -140,7 +147,7 @@ def summary_for_rows(rows: list[dict[str, str]]) -> dict[str, object]:
     successful_efficiency = [
         value
         for row in rows
-        if bool_value(row, "success")
+        if completed_success(row)
         and (value := optional_float(row, "path_efficiency")) is not None
     ]
     clearance = [

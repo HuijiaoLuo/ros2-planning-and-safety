@@ -98,9 +98,17 @@ All listed runs were collision-free.
 ![Robustness summary](docs/assets/robustness_summary.png)
 
 The evaluation logger records `termination_reason` (`goal_reached`,
-`experiment_timeout`, or `manual_interrupt`) and supports an explicit
-`experiment_timeout_s` launch parameter. This makes failed or stalled runs
-bounded and reproducible instead of relying on an open-ended simulation.
+`goal_confirmation_failed`, `experiment_timeout`, or `manual_interrupt`) and
+supports an explicit `experiment_timeout_s` launch parameter. The top-level
+`success` field now means terminal physical completion: the path follower
+published `goal_reached_latched`, the logger ended with `goal_reached`, and
+the final complete `/odom` sample remained within the goal tolerance.
+Historical tolerance crossings are reported separately as
+`ground_truth_goal_reached_any_time`, while
+`ground_truth_final_within_goal_tolerance` describes the final complete sample.
+This prevents a run that briefly entered the tolerance and later timed out
+from being counted as a successful completion. A controller latch without
+final physical agreement is reported separately.
 
 ## System architecture
 
@@ -168,6 +176,12 @@ planner, and safety configuration are therefore frozen for the next multi-seed
 failure-propagation study. Existing replay, trace-diagnosis, observability,
 and score-consistency tools are used before any further algorithm change.
 
+The frozen numerical values are not claimed to be map-independent. A new map
+or maze is a validation input, not a reason to retune until it succeeds. The
+generalization test keeps the estimator, matcher, controller, and safety
+configuration fixed while varying only the map and task, then classifies the
+failure layer from the recorded evidence.
+
 The next diagnostic layer records the temporal chain behind a terminal
 decision: source pose stamps, LiDAR stamps, logger receipt ages, controller
 events for entering and latching the goal tolerance, and the controller pose
@@ -181,18 +195,37 @@ The estimator compares `/wheel_odom`, pure gyro integration, and
 `/state_estimate` against `/odom` without feeding `/odom` into the estimator.
 An estimated-pose navigation check reached its configured tolerance, but the
 physical `/odom` pose remained outside the goal tolerance. Evaluation therefore
-reports estimated-pose completion and physical completion separately; overall
-success requires the physical check.
+reports historical entry, final-sample proximity, and controller completion
+separately; these are not interchangeable success definitions.
 
 The LiDAR localizer remains diagnostic-only. Its score alternatives and
 covariance/freshness gates help explain ambiguous or stale candidates, but they
 do not turn the bounded local matcher into SLAM. The covariance-aware pose EKF
 is also diagnostic-only until its physical error, covariance calibration, NIS
 values, and measurement rejection behavior are validated across fixed seeds.
-The controller currently exposes this timing evidence but does not yet apply a
-new freshness gate, dwell-time rule, or latency-compensated pose; those changes
-are deferred until the temporal failure-propagation experiment identifies the
-responsible layer.
+The controller exposes this timing evidence and now supports an optional finite
+`goal_confirmation_timeout_s`. When enabled, failure to obtain the required
+fresh LiDAR/independent-estimate confirmation produces a
+`goal_confirmation_timeout` event and transitions the controller into a
+bounded low-speed `FINAL_APPROACH` state. It does not latch success; the robot
+must leave and re-enter the confirmation region before another confirmation
+attempt. The default `0.0` keeps the legacy wait behavior for controlled
+comparisons. An optional positive `goal_confirmation_max_attempts` bounds the
+number of failed recovery cycles; exhaustion enters `GOAL_UNCONFIRMED`, stops
+safely, and reports `goal_confirmation_failed` instead of looping indefinitely.
+Confirmation also requires the consumed navigation pose to be recent and the
+estimated planar speed to be below the configured confirmation limit, so a
+moving or stale estimate cannot directly latch the goal.
+
+### V5 localization model in progress
+
+V5 starts a separate known-map Monte Carlo Localization (MCL) backend rather
+than adding more V4 threshold tuning. Its dependency-free core maintains
+multiple pose hypotheses, applies wheel/IMU motion noise, scores LiDAR
+endpoints with an occupancy-map likelihood field, and reports covariance,
+effective sample size, and ambiguity. The core and tests are documented in
+[`V5_MCL.md`](V5_MCL.md); the ROS adapter and V4/V5 cross-map comparison remain
+next steps. V5 is not SLAM because the map is still assumed known and static.
 
 ## Quick start
 

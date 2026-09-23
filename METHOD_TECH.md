@@ -560,10 +560,15 @@ event-level audit, while `diagnose_navigation_trace.py` classifies the closed
 loop outcome. This distinction prevents status persistence from being
 mistaken for additional LiDAR evidence.
 
-This checkpoint is intentionally conservative: a run is counted as physically
-successful only when the ground-truth evaluation pose reaches the goal. A
-controller reaching a tolerance using an estimated pose is reported separately
-because it can terminate early while the physical robot is still displaced.
+This checkpoint keeps three different facts separate. The
+`ground_truth_goal_reached_any_time` field records whether /odom ever entered
+the goal tolerance; it is not a terminal completion result. The
+`ground_truth_final_within_goal_tolerance` field describes the final complete
+trace sample. The top-level `success` field is true only when the controller
+publishes `goal_reached_latched`, the evaluation terminates with
+`goal_reached`, and the final complete `/odom` sample remains within the goal
+tolerance. This prevents both historical tolerance entries and estimated-pose
+latches without physical agreement from being reported as successful.
 
 ### Covariance-aware pose EKF
 
@@ -818,6 +823,44 @@ This prevents a mean estimate from satisfying the goal distance while its
 uncertainty ellipse is still much larger than the goal tolerance. The bound is
 a configurable safety policy and must be interpreted together with covariance
 calibration; it is not a ground-truth measurement.
+
+The confirmation gate also requires the navigation pose's planar speed to be
+no greater than `goal_confirmation_max_speed_m_s` (default `0.05 m/s`) and
+the consumed navigation pose header to be no older than
+`goal_confirmation_max_pose_age_s` (default `0.15 s`). These are temporal and
+motion-quality gates, not estimator accuracy claims: a pose that is geometrically
+near the goal but still moving or outside the source-time bound cannot latch.
+
+The confirmation wait is optionally bounded by the launch parameter
+`goal_confirmation_timeout_s`. When it is positive, the timer starts when the
+controller first enters the goal tolerance. If the required fresh LiDAR events,
+independent pose, or independent covariance check do not become valid before
+the deadline, the follower publishes `event=goal_confirmation_timeout` and
+transitions from `CONFIRMING` to a bounded low-speed `FINAL_APPROACH` state.
+It does not set `goal_reached`. The controller must leave the goal tolerance,
+then re-enter it, before a new confirmation window can start. If the target is
+clearly lost, the state returns to `APPROACHING`; only successful confirmation
+transitions to `GOAL_LATCHED`. The evaluation trace records
+`goal_state`, `confirmation_start_time_s`, `confirmation_duration_s`,
+`confirmation_timeout_count`, and `final_approach_reentry_count`. A value of
+`0.0` preserves the unbounded wait used by legacy comparison runs.
+Every state transition is also emitted as a `goal_state_changed` diagnostic
+event, so the final reported state is not inferred from a stale confirmation
+event.
+
+For a bounded validation run, `goal_confirmation_max_attempts` can limit the
+number of timeout/recovery cycles. Once the limit is reached, the controller
+enters `GOAL_UNCONFIRMED`, publishes `goal_confirmation_failed`, and commands
+zero velocity until a new path arrives. This is an explicit safe failure: it
+does not count as `goal_reached` and prevents a confirmation failure from
+turning into an unbounded recovery loop.
+
+During `FINAL_APPROACH`, the controller also preserves the target bearing at
+the timeout transition. Recomputing `atan2(goal - pose)` from a residual that
+is already only a few centimetres can make the bearing dominated by map-match
+noise and cause repeated saturated in-place turns. The fixed bearing is a
+control-stability measure for this recovery state; it is not an additional
+localization measurement and does not by itself authorize goal completion.
 
 This is intentionally a direct-goal baseline, not the default controller anymore. It is useful for comparing direct waypoint tracking against planned-path tracking.
 
@@ -1346,9 +1389,17 @@ total-run limit in the evaluation logger. A positive value causes the logger
 to finish the run and shut down the ROS graph after that many seconds from the
 first odometry sample; `0.0` disables the limit. The CSV records both
 `configured_experiment_timeout_s` and `termination_reason`, whose values can
-include `goal_reached`, `experiment_timeout`, or `manual_interrupt`. This
-distinguishes a genuine navigation failure from an intentionally bounded
-experiment.
+include `goal_reached`, `goal_confirmation_failed`, `experiment_timeout`, or
+`manual_interrupt`.
+Importantly, the logger no longer terminates with `goal_reached` merely because
+the ideal Gazebo `/odom` pose briefly enters the goal tolerance. That event is
+recorded as `ground_truth_goal_reached_any_time` (with the legacy
+`ground_truth_goal_reached` alias retained); the terminal `goal_reached` reason
+requires the path follower's explicit `goal_reached_latched` event. The
+additional final-sample fields distinguish historical entry from the physical
+pose at shutdown. This prevents the evaluation process from cutting off
+`CONFIRMING` or `FINAL_APPROACH` recovery and makes incomplete runs
+diagnostically unsuccessful.
 
 Example:
 
@@ -1371,7 +1422,14 @@ The result columns are defined as follows:
 | `case` | Short label for the experiment configuration. |
 | `minimum_clearance` | Configured LiDAR distance threshold used by the safety supervisor. |
 | `planning_radius_m` | Configured obstacle-inflation radius used by the A* planner. |
-| `success` | Whether the robot reached the goal within the goal tolerance. |
+| `success` | Terminal physical completion: controller latch, `goal_reached` termination, and final `/odom` within tolerance. |
+| `controller_latched_without_physical_completion` | The controller latched, but the final `/odom` sample was outside the goal tolerance. |
+| `ground_truth_goal_reached_any_time` | Whether /odom ever entered the goal tolerance during the run. |
+| `ground_truth_final_within_goal_tolerance` | Whether the final complete /odom sample was inside the goal tolerance. |
+| `navigation_pose_goal_reached_any_time` | Whether the navigation pose ever entered the goal tolerance. |
+| `navigation_pose_final_within_goal_tolerance` | Whether the final navigation pose sample was inside the tolerance. |
+| `state_estimate_goal_reached_any_time` | Whether /state_estimate ever entered the goal tolerance. |
+| `state_estimate_final_within_goal_tolerance` | Whether the final state-estimate sample was inside the tolerance. |
 | `time_to_goal_s` | Time from the first odometry sample to goal arrival. |
 | `travelled_distance_m` | Distance accumulated from the odometry trajectory. |
 | `minimum_clearance_m` | Smallest valid LiDAR return in the forward sector during the run. |
@@ -1619,6 +1677,9 @@ The current ROS2 milestone includes:
 
 The current limitations are equally important:
 
+- the numerical gate values are frozen experiment configuration, not claims
+  of map-independent optimality; cross-map validation changes the map and
+  task while keeping those values fixed;
 - `/odom` remains the only validated physical navigation reference;
 - `/state_estimate` has useful covariance and NIS diagnostics but still shows
   systematic position error under wheel-motion uncertainty;
@@ -1627,13 +1688,31 @@ The current limitations are equally important:
 - sparse raster-map scans can produce ambiguous nearby minima, and the
   asynchronous matcher can return stale or repeated candidates;
 - a localized pose may enter the goal tolerance while the controller is still
-  waiting for independent confirmation; the current implementation records
-  this terminal-decision timeline but does not yet apply a new freshness or
-  dwell-time policy;
+  waiting for independent confirmation; the optional confirmation deadline
+  now leaves that wait through bounded `FINAL_APPROACH` recovery, but the
+  recovery is not yet latency-compensated and does not prove physical arrival;
 - LiDAR corrections are external map-to-odom updates, not LiDAR measurements
   fused inside the pose EKF;
 - the bounded local matcher is not full ICP, SLAM, loop closure, or globally
   observable localization.
+
+### V5 probabilistic localization direction
+
+The next localization backend is being developed separately from the frozen
+V4 implementation. V5 uses known-map Monte Carlo Localization: wheel/IMU
+increments propagate a particle set, LiDAR endpoints receive likelihood-field
+weights from the occupancy map, and systematic resampling maintains plausible
+pose hypotheses. The weighted pose, covariance, effective sample size, and
+normalized entropy expose ambiguity instead of selecting one local minimum.
+
+The dependency-free mathematical core is in
+`ros2_ws/src/robotics_nav/robotics_nav/mcl_localization.py` and is tested
+without Gazebo. It is not SLAM: the map is still assumed known and static.
+The ROS adapter will preserve the V4 localization interface so that controller
+and evaluation behavior can be compared without changing their parameters.
+V4 remains the deterministic local-matcher baseline; V5 is evaluated across
+different maps and tasks with the same frozen configuration rather than tuned
+until one map succeeds.
 
 The next layers are intentionally separated so that each experiment remains
 interpretable:

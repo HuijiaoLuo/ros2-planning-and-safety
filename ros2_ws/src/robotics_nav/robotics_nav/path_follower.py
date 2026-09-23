@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 import time
+from enum import Enum
 from typing import Optional
 
 import rclpy
@@ -59,6 +60,24 @@ def planar_position_sigma(message: Odometry) -> Optional[float]:
     return math.sqrt(largest_variance)
 
 
+class GoalControlState(str, Enum):
+    """Explicit terminal-control states used by the path follower.
+
+    ``APPROACHING`` is ordinary path tracking. ``CONFIRMING`` is entered only
+    after the navigation pose reaches the goal tolerance. ``FINAL_APPROACH``
+    is a bounded low-speed recovery after confirmation evidence times out.
+    ``GOAL_LATCHED`` is the only successful state that permanently commands
+    zero velocity for the current endpoint. ``GOAL_UNCONFIRMED`` is an explicit
+    safe failure state after a bounded number of unsuccessful attempts.
+    """
+
+    APPROACHING = "APPROACHING"
+    CONFIRMING = "CONFIRMING"
+    FINAL_APPROACH = "FINAL_APPROACH"
+    GOAL_LATCHED = "GOAL_LATCHED"
+    GOAL_UNCONFIRMED = "GOAL_UNCONFIRMED"
+
+
 class PathFollower(Node):
     """Convert a planned path and odometry into raw velocity commands."""
 
@@ -81,6 +100,7 @@ class PathFollower(Node):
         self.declare_parameter("final_approach_distance", 0.60)
         self.declare_parameter("final_approach_heading_gain", 1.0)
         self.declare_parameter("final_approach_max_angular_speed", 0.60)
+        self.declare_parameter("final_approach_speed_m_s", 0.05)
         self.declare_parameter("heading_deadband", 0.03)
         self.declare_parameter("odom_topic", "/odom")
         # When the controller follows a scan-corrected pose, a distance
@@ -91,6 +111,15 @@ class PathFollower(Node):
         self.declare_parameter("localization_match_valid_topic", "/localization_match_valid")
         self.declare_parameter("localization_match_status_topic", "/localization_match_status")
         self.declare_parameter("goal_confirmation_samples", 5)
+        # A localized pose can remain inside the goal tolerance while the
+        # independent confirmation source never becomes usable.  A finite
+        # deadline changes that condition into a bounded low-speed final
+        # approach instead of an unbounded stop.  Zero preserves the legacy
+        # comparison behavior.
+        self.declare_parameter("goal_confirmation_timeout_s", 0.0)
+        self.declare_parameter("goal_confirmation_max_attempts", 0)
+        self.declare_parameter("goal_confirmation_max_speed_m_s", 0.05)
+        self.declare_parameter("goal_confirmation_max_pose_age_s", 0.15)
         # A scan matcher can produce a locally self-consistent pose that is
         # still wrong in the global map. When navigation uses that corrected
         # pose, also require the independent wheel/IMU estimate to be inside
@@ -124,6 +153,10 @@ class PathFollower(Node):
         self.final_approach_max_angular_speed = float(
             self.get_parameter("final_approach_max_angular_speed").value
         )
+        self.final_approach_speed_m_s = max(
+            0.0,
+            float(self.get_parameter("final_approach_speed_m_s").value),
+        )
         self.heading_deadband = float(
             self.get_parameter("heading_deadband").value
         )
@@ -140,6 +173,22 @@ class PathFollower(Node):
         )
         self.goal_confirmation_samples = max(
             1, int(self.get_parameter("goal_confirmation_samples").value)
+        )
+        self.goal_confirmation_timeout_s = max(
+            0.0,
+            float(self.get_parameter("goal_confirmation_timeout_s").value),
+        )
+        self.goal_confirmation_max_attempts = max(
+            0,
+            int(self.get_parameter("goal_confirmation_max_attempts").value),
+        )
+        self.goal_confirmation_max_speed_m_s = max(
+            0.0,
+            float(self.get_parameter("goal_confirmation_max_speed_m_s").value),
+        )
+        self.goal_confirmation_max_pose_age_s = max(
+            0.0,
+            float(self.get_parameter("goal_confirmation_max_pose_age_s").value),
         )
         self.goal_reference_topic = str(
             self.get_parameter("goal_reference_topic").value
@@ -228,9 +277,14 @@ class PathFollower(Node):
         self.localization_match_valid: Optional[bool] = None
         self.localization_match_status: Optional[str] = None
         self.localization_accepted_events_since_entry = 0
-        self.in_goal_tolerance = False
         self.latest_goal_reference: Optional[Odometry] = None
         self.goal_confirmation_count = 0
+        self.goal_confirmation_started_at: Optional[float] = None
+        self.goal_confirmation_timeout_count = 0
+        self.final_approach_reentry_count = 0
+        self.final_approach_has_left_tolerance = False
+        self.final_approach_heading: Optional[float] = None
+        self.goal_state = GoalControlState.APPROACHING
 
     @staticmethod
     def stamp_seconds(message: Odometry) -> float:
@@ -268,13 +322,28 @@ class PathFollower(Node):
         goal_distance_text = (
             "" if goal_distance is None else f"{goal_distance:.9f}"
         )
+        confirmation_start_text = (
+            ""
+            if self.goal_confirmation_started_at is None
+            else f"{self.goal_confirmation_started_at:.9f}"
+        )
+        confirmation_duration_text = (
+            ""
+            if self.goal_confirmation_started_at is None
+            else f"{max(0.0, node_stamp - self.goal_confirmation_started_at):.9f}"
+        )
         message = String()
         message.data = (
             f"event={event};"
+            f"goal_state={self.goal_state.value};"
             f"node_stamp_s={node_stamp:.9f};"
             f"pose_stamp_s={pose_stamp_text};"
             f"pose_age_s={pose_age_text};"
             f"goal_distance_m={goal_distance_text};"
+            f"confirmation_start_time_s={confirmation_start_text};"
+            f"confirmation_duration_s={confirmation_duration_text};"
+            f"confirmation_timeout_count={self.goal_confirmation_timeout_count};"
+            f"final_approach_reentry_count={self.final_approach_reentry_count};"
             f"wall_time_s={time.monotonic():.9f}"
         )
         self.goal_event_publisher.publish(message)
@@ -300,6 +369,34 @@ class PathFollower(Node):
                 "uncertainty <= "
                 f"{self.goal_reference_position_sigma_max_m:.3f} m (1-sigma)."
             )
+        if self.goal_confirmation_timeout_s > 0.0:
+            self.get_logger().info(
+                "Goal confirmation timeout is "
+                f"{self.goal_confirmation_timeout_s:.3f} s; timeout is "
+                "followed by bounded FINAL_APPROACH recovery."
+            )
+        self.get_logger().info(
+            "Goal confirmation also requires navigation speed <= "
+            f"{self.goal_confirmation_max_speed_m_s:.3f} m/s and pose age <= "
+            f"{self.goal_confirmation_max_pose_age_s:.3f} s."
+        )
+
+    def set_goal_state(self, state: GoalControlState) -> None:
+        """Change the explicit terminal-control state and log transitions."""
+        if state == self.goal_state:
+            return
+        previous = self.goal_state.value
+        self.goal_state = state
+        self.get_logger().info(
+            f"Goal control state: {previous} -> {state.value}."
+        )
+        # State transitions are diagnostic events in their own right.  The
+        # evaluation logger cannot infer the live state from a later terminal
+        # event, because FINAL_APPROACH may return to APPROACHING before the
+        # run ends.  Publishing the transition keeps the final CSV state
+        # aligned with the controller state machine rather than with the last
+        # confirmation-related event only.
+        self.publish_goal_event("goal_state_changed", None)
 
     def report_state(self, state: str) -> None:
         """Log only control-state transitions, not every timer tick."""
@@ -316,6 +413,14 @@ class PathFollower(Node):
                 # The first path establishes the destination for this run.
                 self.goal_reached = False
                 self.last_control_state = None
+                self.goal_confirmation_count = 0
+                self.goal_confirmation_started_at = None
+                self.goal_confirmation_timeout_count = 0
+                self.final_approach_reentry_count = 0
+                self.final_approach_has_left_tolerance = False
+                self.final_approach_heading = None
+                self.set_goal_state(GoalControlState.APPROACHING)
+                self.localization_accepted_events_since_entry = 0
             else:
                 endpoint_change = math.hypot(
                     new_endpoint[0] - self.goal_endpoint[0],
@@ -327,7 +432,12 @@ class PathFollower(Node):
                     self.goal_reached = False
                     self.last_control_state = None
                     self.goal_confirmation_count = 0
-                    self.in_goal_tolerance = False
+                    self.goal_confirmation_started_at = None
+                    self.goal_confirmation_timeout_count = 0
+                    self.final_approach_reentry_count = 0
+                    self.final_approach_has_left_tolerance = False
+                    self.final_approach_heading = None
+                    self.set_goal_state(GoalControlState.APPROACHING)
                     self.localization_accepted_events_since_entry = 0
             self.goal_endpoint = new_endpoint
             self.get_logger().info(
@@ -339,7 +449,12 @@ class PathFollower(Node):
             self.goal_reached = False
             self.last_control_state = None
             self.goal_confirmation_count = 0
-            self.in_goal_tolerance = False
+            self.goal_confirmation_started_at = None
+            self.goal_confirmation_timeout_count = 0
+            self.final_approach_reentry_count = 0
+            self.final_approach_has_left_tolerance = False
+            self.final_approach_heading = None
+            self.set_goal_state(GoalControlState.APPROACHING)
             self.localization_accepted_events_since_entry = 0
             self.get_logger().warn("Received an empty path.")
 
@@ -367,7 +482,7 @@ class PathFollower(Node):
         status = str(message.data)
         self.localization_match_status = status
         if status == "accepted":
-            if self.in_goal_tolerance:
+            if self.goal_state == GoalControlState.CONFIRMING:
                 self.localization_accepted_events_since_entry += 1
         else:
             self.localization_accepted_events_since_entry = 0
@@ -462,7 +577,7 @@ class PathFollower(Node):
 
         goal = self.latest_path.poses[-1].pose.position
         goal_distance = math.hypot(goal.x - position.x, goal.y - position.y)
-        if self.goal_reached:
+        if self.goal_state == GoalControlState.GOAL_LATCHED:
             # Once this endpoint has been reached, keep publishing zero
             # velocity even if estimator noise moves the reported distance a
             # few centimetres outside the tolerance.  A new endpoint is the
@@ -472,112 +587,249 @@ class PathFollower(Node):
             )
             self.publish_stop()
             return
-        if goal_distance <= self.goal_tolerance:
-            if not self.in_goal_tolerance:
-                self.in_goal_tolerance = True
-                # Accepted events from before entering the goal tolerance do
-                # not count toward this terminal confirmation window.
-                self.localization_accepted_events_since_entry = 0
-                self.publish_goal_event("goal_tolerance_entered", goal_distance)
-            if self.require_localization_match_for_goal:
-                if self.localization_match_valid is not True:
-                    self.goal_confirmation_count = 0
-                    self.localization_accepted_events_since_entry = 0
-                    self.report_state(
-                        "At estimated goal, waiting for a valid localization match."
-                    )
-                    self.publish_stop()
-                    return
-                if self.localization_match_status != "accepted":
-                    self.goal_confirmation_count = 0
-                    self.localization_accepted_events_since_entry = 0
-                    status = self.localization_match_status or "not_received"
-                    self.report_state(
-                        "At estimated goal, waiting for a fresh accepted "
-                        f"localization match; status={status}."
-                    )
-                    self.publish_stop()
-                    return
-            if self.require_goal_reference_for_goal:
-                if self.latest_goal_reference is None:
-                    self.goal_confirmation_count = 0
-                    self.localization_accepted_events_since_entry = 0
-                    self.report_state(
-                        f"At estimated goal, waiting for {self.goal_reference_topic}."
-                    )
-                    self.publish_stop()
-                    return
-                reference_position = self.latest_goal_reference.pose.pose.position
-                reference_distance = math.hypot(
-                    goal.x - reference_position.x,
-                    goal.y - reference_position.y,
-                )
-                if reference_distance > self.goal_reference_tolerance:
-                    self.goal_confirmation_count = 0
-                    self.localization_accepted_events_since_entry = 0
-                    self.report_state(
-                        "At localized goal, waiting for independent estimate; "
-                        f"distance={reference_distance:.3f} m."
-                    )
-                    self.publish_stop()
-                    return
-                reference_sigma = planar_position_sigma(self.latest_goal_reference)
-                if (
-                    reference_sigma is None
-                    or reference_sigma > self.goal_reference_position_sigma_max_m
-                ):
-                    self.goal_confirmation_count = 0
-                    self.localization_accepted_events_since_entry = 0
-                    sigma_text = (
-                        "unavailable"
-                        if reference_sigma is None
-                        else f"{reference_sigma:.3f} m"
-                    )
-                    self.report_state(
-                        "At localized goal, waiting for independent estimate "
-                        f"uncertainty; sigma={sigma_text}."
-                    )
-                    self.publish_stop()
-                    return
-            if self.require_localization_match_for_goal:
-                if (
-                    self.localization_accepted_events_since_entry
-                    < self.goal_confirmation_samples
-                ):
-                    self.goal_confirmation_count = 0
-                    self.report_state(
-                        "Confirming fresh LiDAR matches; "
-                        f"accepted={self.localization_accepted_events_since_entry}/"
-                        f"{self.goal_confirmation_samples}."
-                    )
-                    self.publish_stop()
-                    return
-            else:
-                self.goal_confirmation_count += 1
-                if self.goal_confirmation_count < self.goal_confirmation_samples:
-                    self.report_state(
-                        "Confirming goal distance; "
-                        f"sample={self.goal_confirmation_count}/"
-                        f"{self.goal_confirmation_samples}."
-                    )
-                    self.publish_stop()
-                    return
-            if not self.goal_reached:
-                self.publish_goal_event("goal_reached_latched", goal_distance)
-                self.get_logger().info("Planned path goal reached.")
-                self.goal_reached = True
+
+        if self.goal_state == GoalControlState.GOAL_UNCONFIRMED:
+            # Repeated confirmation failure is an explicit safe failure, not
+            # evidence of arrival and not permission to keep cycling through
+            # low-speed recovery indefinitely.
             self.report_state(
-                f"Stopped at planned endpoint; distance={goal_distance:.3f} m."
+                "Stopped because goal confirmation failed; awaiting a new path."
             )
             self.publish_stop()
             return
-        self.goal_confirmation_count = 0
-        if self.in_goal_tolerance:
-            self.publish_goal_event("goal_tolerance_exited", goal_distance)
-        self.in_goal_tolerance = False
-        self.localization_accepted_events_since_entry = 0
 
-        final_approach = goal_distance <= self.final_approach_distance
+        if goal_distance <= self.goal_tolerance:
+            if self.goal_state == GoalControlState.APPROACHING:
+                self.goal_confirmation_started_at = (
+                    self.get_clock().now().nanoseconds * 1.0e-9
+                )
+                # Accepted events from before entering the goal tolerance do
+                # not count toward this terminal confirmation window.
+                self.localization_accepted_events_since_entry = 0
+                self.set_goal_state(GoalControlState.CONFIRMING)
+                self.publish_goal_event("goal_tolerance_entered", goal_distance)
+            elif (
+                self.goal_state == GoalControlState.FINAL_APPROACH
+                and self.final_approach_has_left_tolerance
+            ):
+                self.final_approach_reentry_count += 1
+                self.goal_confirmation_started_at = (
+                    self.get_clock().now().nanoseconds * 1.0e-9
+                )
+                self.localization_accepted_events_since_entry = 0
+                self.final_approach_has_left_tolerance = False
+                self.final_approach_heading = None
+                self.set_goal_state(GoalControlState.CONFIRMING)
+                self.publish_goal_event(
+                    "goal_confirmation_reentered",
+                    goal_distance,
+                )
+
+            confirmation_timed_out = False
+            if self.goal_state == GoalControlState.CONFIRMING:
+                confirmation_elapsed = (
+                    None
+                    if self.goal_confirmation_started_at is None
+                    else (
+                        self.get_clock().now().nanoseconds * 1.0e-9
+                        - self.goal_confirmation_started_at
+                    )
+                )
+                if (
+                    self.goal_confirmation_timeout_s > 0.0
+                    and confirmation_elapsed is not None
+                    and confirmation_elapsed >= self.goal_confirmation_timeout_s
+                ):
+                    self.goal_confirmation_count = 0
+                    self.localization_accepted_events_since_entry = 0
+                    self.goal_confirmation_timeout_count += 1
+                    self.final_approach_has_left_tolerance = False
+                    if (
+                        self.goal_confirmation_max_attempts > 0
+                        and self.goal_confirmation_timeout_count
+                        >= self.goal_confirmation_max_attempts
+                    ):
+                        self.set_goal_state(GoalControlState.GOAL_UNCONFIRMED)
+                        self.get_logger().warning(
+                            "Goal confirmation failed after "
+                            f"{self.goal_confirmation_timeout_count} attempts; "
+                            "stopping without declaring success."
+                        )
+                        self.publish_goal_event(
+                            "goal_confirmation_failed",
+                            goal_distance,
+                        )
+                        self.publish_stop()
+                        return
+                    # Once the estimated residual is only a few centimetres,
+                    # recomputing atan2(goal - pose) at every control tick
+                    # makes the bearing dominated by localization noise.
+                    # Preserve the direction at this transition so recovery
+                    # can keep making translational progress instead of
+                    # oscillating between forward motion and saturated turns.
+                    self.final_approach_heading = (
+                        math.atan2(goal.y - position.y, goal.x - position.x)
+                        if goal_distance > 1.0e-4
+                        else yaw
+                    )
+                    self.set_goal_state(GoalControlState.FINAL_APPROACH)
+                    confirmation_timed_out = True
+                    self.get_logger().warning(
+                        "Goal confirmation timed out; entering bounded "
+                        "FINAL_APPROACH without declaring success."
+                    )
+                    self.publish_goal_event(
+                        "goal_confirmation_timeout",
+                        goal_distance,
+                    )
+
+                if not confirmation_timed_out:
+                    confirmation_speed = math.hypot(
+                        self.latest_odom.twist.twist.linear.x,
+                        self.latest_odom.twist.twist.linear.y,
+                    )
+                    confirmation_pose_age = (
+                        self.get_clock().now().nanoseconds * 1.0e-9
+                        - self.stamp_seconds(self.latest_odom)
+                    )
+                    if confirmation_speed > self.goal_confirmation_max_speed_m_s:
+                        self.goal_confirmation_count = 0
+                        self.localization_accepted_events_since_entry = 0
+                        self.report_state(
+                            "At estimated goal, waiting for low speed; "
+                            f"speed={confirmation_speed:.3f} m/s."
+                        )
+                        self.publish_stop()
+                        return
+                    if (
+                        confirmation_pose_age < 0.0
+                        or confirmation_pose_age
+                        > self.goal_confirmation_max_pose_age_s
+                    ):
+                        self.goal_confirmation_count = 0
+                        self.localization_accepted_events_since_entry = 0
+                        self.report_state(
+                            "At estimated goal, waiting for a fresh pose; "
+                            f"age={confirmation_pose_age:.3f} s."
+                        )
+                        self.publish_stop()
+                        return
+                    if self.require_localization_match_for_goal:
+                        if self.localization_match_valid is not True:
+                            self.goal_confirmation_count = 0
+                            self.localization_accepted_events_since_entry = 0
+                            self.report_state(
+                                "At estimated goal, waiting for a valid "
+                                "localization match."
+                            )
+                            self.publish_stop()
+                            return
+                        if self.localization_match_status != "accepted":
+                            self.goal_confirmation_count = 0
+                            self.localization_accepted_events_since_entry = 0
+                            status = self.localization_match_status or "not_received"
+                            self.report_state(
+                                "At estimated goal, waiting for a fresh accepted "
+                                f"localization match; status={status}."
+                            )
+                            self.publish_stop()
+                            return
+                    if self.require_goal_reference_for_goal:
+                        if self.latest_goal_reference is None:
+                            self.goal_confirmation_count = 0
+                            self.localization_accepted_events_since_entry = 0
+                            self.report_state(
+                                f"At estimated goal, waiting for {self.goal_reference_topic}."
+                            )
+                            self.publish_stop()
+                            return
+                        reference_position = self.latest_goal_reference.pose.pose.position
+                        reference_distance = math.hypot(
+                            goal.x - reference_position.x,
+                            goal.y - reference_position.y,
+                        )
+                        if reference_distance > self.goal_reference_tolerance:
+                            self.goal_confirmation_count = 0
+                            self.localization_accepted_events_since_entry = 0
+                            self.report_state(
+                                "At localized goal, waiting for independent "
+                                f"estimate; distance={reference_distance:.3f} m."
+                            )
+                            self.publish_stop()
+                            return
+                        reference_sigma = planar_position_sigma(
+                            self.latest_goal_reference
+                        )
+                        if (
+                            reference_sigma is None
+                            or reference_sigma
+                            > self.goal_reference_position_sigma_max_m
+                        ):
+                            self.goal_confirmation_count = 0
+                            self.localization_accepted_events_since_entry = 0
+                            sigma_text = (
+                                "unavailable"
+                                if reference_sigma is None
+                                else f"{reference_sigma:.3f} m"
+                            )
+                            self.report_state(
+                                "At localized goal, waiting for independent "
+                                f"estimate uncertainty; sigma={sigma_text}."
+                            )
+                            self.publish_stop()
+                            return
+                    if self.require_localization_match_for_goal:
+                        if (
+                            self.localization_accepted_events_since_entry
+                            < self.goal_confirmation_samples
+                        ):
+                            self.goal_confirmation_count = 0
+                            self.report_state(
+                                "Confirming fresh LiDAR matches; "
+                                f"accepted={self.localization_accepted_events_since_entry}/"
+                                f"{self.goal_confirmation_samples}."
+                            )
+                            self.publish_stop()
+                            return
+                    else:
+                        self.goal_confirmation_count += 1
+                        if (
+                            self.goal_confirmation_count
+                            < self.goal_confirmation_samples
+                        ):
+                            self.report_state(
+                                "Confirming goal distance; "
+                                f"sample={self.goal_confirmation_count}/"
+                                f"{self.goal_confirmation_samples}."
+                            )
+                            self.publish_stop()
+                            return
+                    self.set_goal_state(GoalControlState.GOAL_LATCHED)
+                    self.goal_reached = True
+                    self.publish_goal_event("goal_reached_latched", goal_distance)
+                    self.get_logger().info("Planned path goal reached.")
+                    self.report_state(
+                        f"Stopped at planned endpoint; distance={goal_distance:.3f} m."
+                    )
+                    self.publish_stop()
+                    return
+        else:
+            self.goal_confirmation_count = 0
+            self.localization_accepted_events_since_entry = 0
+            if self.goal_state == GoalControlState.CONFIRMING:
+                self.publish_goal_event("goal_tolerance_exited", goal_distance)
+                self.goal_confirmation_started_at = None
+                self.set_goal_state(GoalControlState.APPROACHING)
+            elif self.goal_state == GoalControlState.FINAL_APPROACH:
+                self.final_approach_has_left_tolerance = True
+                if goal_distance > self.final_approach_distance:
+                    self.final_approach_heading = None
+                    self.set_goal_state(GoalControlState.APPROACHING)
+
+        final_approach = (
+            self.goal_state == GoalControlState.FINAL_APPROACH
+            or goal_distance <= self.final_approach_distance
+        )
         if final_approach:
             # The final path endpoint is more stable than the next grid cell
             # once the robot is close enough to the goal.
@@ -590,7 +842,13 @@ class PathFollower(Node):
                 return
             target_x, target_y = target
 
-        target_heading = math.atan2(target_y - position.y, target_x - position.x)
+        if (
+            self.goal_state == GoalControlState.FINAL_APPROACH
+            and self.final_approach_heading is not None
+        ):
+            target_heading = self.final_approach_heading
+        else:
+            target_heading = math.atan2(target_y - position.y, target_x - position.x)
         heading_error = wrap_angle(target_heading - yaw)
         target_distance = math.hypot(target_x - position.x, target_y - position.y)
 
@@ -626,6 +884,17 @@ class PathFollower(Node):
                 0.0,
                 self.max_linear_speed,
             )
+            if (
+                self.goal_state == GoalControlState.FINAL_APPROACH
+                and target_distance > 1.0e-4
+            ):
+                # Confirmation failure is not evidence of arrival.  Creep
+                # toward the endpoint at a bounded speed until the pose exits
+                # the tolerance and can be re-confirmed normally.
+                command.linear.x = min(
+                    self.final_approach_speed_m_s,
+                    max(command.linear.x, self.final_approach_speed_m_s),
+                )
         else:
             command.linear.x = 0.0
 

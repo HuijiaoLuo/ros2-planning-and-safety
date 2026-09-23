@@ -77,9 +77,30 @@ def changed_events(rows: list[dict[str, str]], dx_name: str, dy_name: str) -> in
 
 def diagnose(evaluation: dict[str, str], trace: list[dict[str, str]]) -> dict[str, object]:
     """Derive compact evidence and a conservative failure classification."""
-    physical_success = as_bool(evaluation, "ground_truth_goal_reached")
-    navigation_success = as_bool(evaluation, "navigation_pose_goal_reached")
-    state_success = as_bool(evaluation, "state_estimate_goal_reached")
+    controller_latched = as_bool(evaluation, "controller_goal_latched")
+    controller_success = as_bool(evaluation, "success")
+    if controller_success is None:
+        controller_success = controller_latched
+    physical_success = as_bool(evaluation, "ground_truth_goal_reached_any_time")
+    if physical_success is None:
+        physical_success = as_bool(evaluation, "ground_truth_goal_reached")
+    physical_final = as_bool(
+        evaluation, "ground_truth_final_within_goal_tolerance"
+    )
+    if controller_latched is not None:
+        controller_success = controller_latched and physical_final is not False
+    elif controller_success is None:
+        controller_success = controller_latched
+    navigation_success = as_bool(
+        evaluation, "navigation_pose_goal_reached_any_time"
+    )
+    if navigation_success is None:
+        navigation_success = as_bool(evaluation, "navigation_pose_goal_reached")
+    state_success = as_bool(
+        evaluation, "state_estimate_goal_reached_any_time"
+    )
+    if state_success is None:
+        state_success = as_bool(evaluation, "state_estimate_goal_reached")
 
     statuses = Counter(
         row["localization_match_status"].strip()
@@ -99,8 +120,14 @@ def diagnose(evaluation: dict[str, str], trace: list[dict[str, str]]) -> dict[st
         as_float(row, "localization_score_improvement_m") for row in trace
     )
 
-    if physical_success is True:
-        classification = "physical_goal_reached"
+    if controller_success is True:
+        classification = "physical_goal_completed"
+    elif controller_latched is True and physical_final is not True:
+        classification = "controller_latched_without_physical_completion"
+    elif physical_final is True:
+        classification = "physical_goal_at_final_sample_without_latch"
+    elif physical_success is True:
+        classification = "physical_goal_reached_but_not_completed"
     elif navigation_success is True or state_success is True:
         classification = "estimated_goal_without_physical_goal"
     else:
@@ -126,7 +153,10 @@ def diagnose(evaluation: dict[str, str], trace: list[dict[str, str]]) -> dict[st
     return {
         "classification": classification,
         "bottleneck": bottleneck,
+        "controller_success": controller_success,
+        "controller_latched": controller_latched,
         "physical_success": physical_success,
+        "physical_final_within_tolerance": physical_final,
         "state_estimate_success": state_success,
         "navigation_pose_success": navigation_success,
         "ground_truth_final_error_m": as_float(evaluation, "ground_truth_final_error_m"),
@@ -161,7 +191,13 @@ def print_report(report: dict[str, object], evaluation_path: Path) -> None:
     print(f"classification: {report['classification']}")
     print(f"bottleneck: {report['bottleneck']}")
     print(f"termination_reason: {report['termination_reason']}")
-    print(f"physical_success: {report['physical_success']}")
+    print(f"controller_success: {report['controller_success']}")
+    print(f"controller_latched: {report['controller_latched']}")
+    print(f"physical_success_any_time: {report['physical_success']}")
+    print(
+        "physical_final_within_tolerance: "
+        f"{report['physical_final_within_tolerance']}"
+    )
     print(f"state_estimate_success: {report['state_estimate_success']}")
     print(f"navigation_pose_success: {report['navigation_pose_success']}")
     print(f"ground_truth_final_error_m: {report['ground_truth_final_error_m']}")

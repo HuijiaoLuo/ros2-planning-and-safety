@@ -97,13 +97,19 @@ def main() -> int:
             pose_age_text += " [CLOCK_DOMAIN_MISMATCH]"
         print(
             "event[{index}]: {event} node_stamp_s={node} "
-            "pose_stamp_s={pose} pose_age_s={age} goal_distance_m={distance}".format(
+            "state={state} pose_stamp_s={pose} pose_age_s={age} "
+            "goal_distance_m={distance} confirmation_duration_s={duration} "
+            "timeouts={timeouts} reentries={reentries}".format(
                 index=index,
                 event=fields.get("event", ""),
                 node=fields.get("node_stamp_s", ""),
+                state=fields.get("goal_state", ""),
                 pose=fields.get("pose_stamp_s", ""),
                 age=pose_age_text,
                 distance=fields.get("goal_distance_m", ""),
+                duration=fields.get("confirmation_duration_s", ""),
+                timeouts=fields.get("confirmation_timeout_count", ""),
+                reentries=fields.get("final_approach_reentry_count", ""),
             )
         )
 
@@ -171,14 +177,30 @@ def main() -> int:
         if metrics is not None:
             print(f"metrics_file: {args.metrics}")
             for field in (
+                "success",
                 "termination_reason",
+                "ground_truth_goal_reached_any_time",
+                "ground_truth_final_within_goal_tolerance",
                 "navigation_pose_goal_reached",
+                "navigation_pose_goal_reached_any_time",
+                "navigation_pose_final_within_goal_tolerance",
                 "state_estimate_goal_reached",
+                "state_estimate_goal_reached_any_time",
+                "state_estimate_final_within_goal_tolerance",
                 "evaluation_final_errors_source",
                 "evaluation_final_logger_ros_timestamp_s",
                 "evaluation_final_navigation_timestamp_s",
                 "evaluation_final_state_estimate_timestamp_s",
                 "controller_goal_event_count",
+               "controller_goal_latched",
+                "controller_latched_without_physical_completion",
+               "controller_goal_failed",
+                "goal_state",
+                "confirmation_start_time_s",
+                "confirmation_duration_s",
+                "confirmation_timeout_count",
+                "final_approach_reentry_count",
+                "goal_confirmation_timeout",
             ):
                 if field in metrics:
                     print(f"{field}: {metrics[field]}")

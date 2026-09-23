@@ -23,6 +23,19 @@ def generate_launch_description():
     navigation_pose_topic = LaunchConfiguration("navigation_pose_topic")
     goal_event_topic = LaunchConfiguration("goal_event_topic")
     goal_tolerance = LaunchConfiguration("goal_tolerance")
+    goal_confirmation_timeout_s = LaunchConfiguration(
+        "goal_confirmation_timeout_s"
+    )
+    goal_confirmation_max_attempts = LaunchConfiguration(
+        "goal_confirmation_max_attempts"
+    )
+    goal_confirmation_max_speed_m_s = LaunchConfiguration(
+        "goal_confirmation_max_speed_m_s"
+    )
+    goal_confirmation_max_pose_age_s = LaunchConfiguration(
+        "goal_confirmation_max_pose_age_s"
+    )
+    final_approach_speed_m_s = LaunchConfiguration("final_approach_speed_m_s")
     estimation_output = LaunchConfiguration("estimation_output")
     estimation_trace_output = LaunchConfiguration("estimation_trace_output")
     imu_gyro_bias_rad_s = LaunchConfiguration("imu_gyro_bias_rad_s")
@@ -237,6 +250,45 @@ def generate_launch_description():
                 description=(
                     "Distance in metres used by both the path follower and the "
                     "evaluation logger to declare the goal reached."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "goal_confirmation_timeout_s",
+                default_value="0.0",
+                description=(
+                    "Maximum time allowed for terminal goal confirmation; "
+                    "timeout enters bounded final approach, and zero "
+                    "preserves the unbounded legacy behavior."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "goal_confirmation_max_attempts",
+                default_value="0",
+                description=(
+                    "Maximum number of timed-out confirmation attempts before "
+                    "the controller enters GOAL_UNCONFIRMED; zero is unlimited."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "final_approach_speed_m_s",
+                default_value="0.05",
+                description=(
+                    "Maximum linear speed used by confirmation-timeout "
+                    "FINAL_APPROACH recovery."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "goal_confirmation_max_speed_m_s",
+                default_value="0.05",
+                description=(
+                    "Maximum navigation speed allowed while confirming the goal."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "goal_confirmation_max_pose_age_s",
+                default_value="0.15",
+                description=(
+                    "Maximum source-pose age allowed while confirming the goal."
                 ),
             ),
             DeclareLaunchArgument(
@@ -744,6 +796,19 @@ def generate_launch_description():
                         "lookahead_distance": 0.10,
                         "max_linear_speed": 0.20,
                         "goal_tolerance": goal_tolerance,
+                        "goal_confirmation_timeout_s": (
+                            goal_confirmation_timeout_s
+                        ),
+                        "goal_confirmation_max_attempts": (
+                            goal_confirmation_max_attempts
+                        ),
+                        "final_approach_speed_m_s": final_approach_speed_m_s,
+                        "goal_confirmation_max_speed_m_s": (
+                            goal_confirmation_max_speed_m_s
+                        ),
+                        "goal_confirmation_max_pose_age_s": (
+                            goal_confirmation_max_pose_age_s
+                        ),
                         "rotate_in_place_threshold": 0.5235987756,
                         "final_approach_distance": 0.60,
                         "final_approach_heading_gain": 1.0,

@@ -192,6 +192,17 @@ class EvaluationLogger(Node):
         self.latest_controller_goal_event: Optional[str] = None
         self.controller_goal_event_count = 0
         self.controller_goal_events = []
+        # Physical entry into the goal tolerance is an evaluation metric, not
+        # a terminal controller decision.  The run may still need to remain
+        # alive while the path follower confirms the goal or resumes its final
+        # approach after a confirmation timeout.
+        self.controller_goal_latched = False
+        self.controller_goal_failed = False
+        self.latest_goal_state: Optional[str] = None
+        self.latest_confirmation_start_time_s: Optional[float] = None
+        self.latest_confirmation_duration_s: Optional[float] = None
+        self.goal_confirmation_timeout_count = 0
+        self.final_approach_reentry_count = 0
 
         # Monotonic receipt times are deliberately kept separate from ROS
         # header stamps.  Header stamps describe when data was generated in
@@ -459,10 +470,54 @@ class EvaluationLogger(Node):
 
     def controller_goal_event_callback(self, message: String) -> None:
         """Record terminal-decision events emitted by the path follower."""
-        self.latest_controller_goal_event = str(message.data)
+        event_text = str(message.data)
+        self.latest_controller_goal_event = event_text
         self.controller_goal_event_count += 1
-        self.controller_goal_events.append(str(message.data))
+        self.controller_goal_events.append(event_text)
         self.controller_goal_event_received_at = time.monotonic()
+        fields = {}
+        for item in event_text.split(";"):
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            fields[key] = value
+        if fields.get("event") == "goal_reached_latched":
+            self.controller_goal_latched = True
+        if fields.get("event") == "goal_confirmation_failed":
+            self.controller_goal_failed = True
+        self.latest_goal_state = fields.get("goal_state") or self.latest_goal_state
+        start_text = fields.get("confirmation_start_time_s", "")
+        duration_text = fields.get("confirmation_duration_s", "")
+        try:
+            self.latest_confirmation_start_time_s = (
+                None if not start_text else float(start_text)
+            )
+        except ValueError:
+            self.latest_confirmation_start_time_s = None
+        try:
+            self.latest_confirmation_duration_s = (
+                None if not duration_text else float(duration_text)
+            )
+        except ValueError:
+            self.latest_confirmation_duration_s = None
+        try:
+            self.goal_confirmation_timeout_count = int(
+                fields.get(
+                    "confirmation_timeout_count",
+                    self.goal_confirmation_timeout_count,
+                )
+            )
+        except ValueError:
+            pass
+        try:
+            self.final_approach_reentry_count = int(
+                fields.get(
+                    "final_approach_reentry_count",
+                    self.final_approach_reentry_count,
+                )
+            )
+        except ValueError:
+            pass
 
     def localization_match_score_callback(self, message: Float64) -> None:
         self.latest_localization_match_score_m = float(message.data)
@@ -636,6 +691,19 @@ class EvaluationLogger(Node):
                 ):
                     self.state_estimate_goal_reached_at = now
 
+        ground_truth_goal_within_tolerance = (
+            ground_truth_goal_distance is not None
+            and ground_truth_goal_distance <= self.goal_tolerance
+        )
+        navigation_goal_within_tolerance = (
+            navigation_goal_distance is not None
+            and navigation_goal_distance <= self.goal_tolerance
+        )
+        state_estimate_goal_within_tolerance = (
+            state_estimate_goal_distance is not None
+            and state_estimate_goal_distance <= self.goal_tolerance
+        )
+
         navigation_position = (
             None
             if navigation_pose is None
@@ -749,8 +817,17 @@ class EvaluationLogger(Node):
                     else state_estimate_position.y
                 ),
                 "ground_truth_goal_error_m": ground_truth_goal_distance,
+                "ground_truth_goal_within_tolerance": (
+                    ground_truth_goal_within_tolerance
+                ),
                 "navigation_goal_error_m": navigation_goal_distance,
+                "navigation_goal_within_tolerance": (
+                    navigation_goal_within_tolerance
+                ),
                 "state_estimate_goal_error_m": state_estimate_goal_distance,
+                "state_estimate_goal_within_tolerance": (
+                    state_estimate_goal_within_tolerance
+                ),
                 "yaw_rad": self.yaw_from_quaternion(
                     self.latest_odom.pose.pose.orientation
                 ),
@@ -779,6 +856,20 @@ class EvaluationLogger(Node):
                 ),
                 "controller_goal_event": self.latest_controller_goal_event,
                 "controller_goal_event_count": self.controller_goal_event_count,
+                "controller_goal_latched": self.controller_goal_latched,
+                "controller_latched_without_physical_completion": (
+                    self.controller_goal_latched
+                    and not ground_truth_goal_within_tolerance
+                ),
+                "controller_goal_failed": self.controller_goal_failed,
+                "goal_state": self.latest_goal_state,
+                "confirmation_start_time_s": self.latest_confirmation_start_time_s,
+                "confirmation_duration_s": self.latest_confirmation_duration_s,
+                "confirmation_timeout_count": self.goal_confirmation_timeout_count,
+                "final_approach_reentry_count": self.final_approach_reentry_count,
+                "goal_confirmation_timeout": (
+                    self.goal_confirmation_timeout_count > 0
+                ),
                 **receipt_ages,
             }
         )
@@ -786,7 +877,15 @@ class EvaluationLogger(Node):
         self.last_sample_time = now
         self.sample_count += 1
 
-        if self.goal_reached_at is not None and self.termination_reason is None:
+        # Do not terminate merely because the ideal simulator pose entered the
+        # tolerance.  That condition is intentionally recorded separately from
+        # the controller's terminal decision; otherwise a delayed or rejected
+        # localization confirmation can be cut off before FINAL_APPROACH has a
+        # chance to recover.  Only an explicit controller latch or explicit
+        # controller confirmation failure is terminal.
+        if self.controller_goal_failed and self.termination_reason is None:
+            self.finish_run("goal_confirmation_failed")
+        elif self.controller_goal_latched and self.termination_reason is None:
             self.finish_run("goal_reached")
 
     def result(self) -> dict[str, object]:
@@ -855,6 +954,18 @@ class EvaluationLogger(Node):
                 self.goal_y,
             )
 
+        ground_truth_final_within_tolerance = (
+            final_error is not None and final_error <= self.goal_tolerance
+        )
+        navigation_final_within_tolerance = (
+            navigation_final_error is not None
+            and navigation_final_error <= self.goal_tolerance
+        )
+        state_estimate_final_within_tolerance = (
+            state_estimate_final_error is not None
+            and state_estimate_final_error <= self.goal_tolerance
+        )
+
         elapsed = None if self.started_at is None else now - self.started_at
         time_to_goal = (
             None
@@ -885,12 +996,36 @@ class EvaluationLogger(Node):
                 or self.navigation_goal_reached_at < self.goal_reached_at
             )
         )
+        termination_reason = self.termination_reason or "external_interrupt"
+        terminal_success = (
+            self.controller_goal_latched
+            and termination_reason == "goal_reached"
+            and ground_truth_final_within_tolerance
+        )
+        controller_latched_without_physical_completion = (
+            self.controller_goal_latched and not ground_truth_final_within_tolerance
+        )
         return {
-            "success": self.goal_reached_at is not None,
+            # success is a terminal physical-completion result. A historical
+            # pose entry, or an estimated-pose controller latch without final
+            # /odom agreement, cannot make the run successful.
+            "success": terminal_success,
             "ground_truth_goal_reached": self.goal_reached_at is not None,
+            "ground_truth_goal_reached_any_time": (
+                self.goal_reached_at is not None
+            ),
+            "ground_truth_final_within_goal_tolerance": (
+                ground_truth_final_within_tolerance
+            ),
             "navigation_pose_topic": self.navigation_pose_topic,
             "navigation_pose_goal_reached": (
                 self.navigation_goal_reached_at is not None
+            ),
+            "navigation_pose_goal_reached_any_time": (
+                self.navigation_goal_reached_at is not None
+            ),
+            "navigation_pose_final_within_goal_tolerance": (
+                navigation_final_within_tolerance
             ),
             "start_x": self.start_x,
             "start_y": self.start_y,
@@ -903,16 +1038,30 @@ class EvaluationLogger(Node):
             "state_estimate_goal_reached": (
                 self.state_estimate_goal_reached_at is not None
             ),
-            "state_estimate_final_error_m": state_estimate_final_error,
-            "controller_goal_event": (
-                None
-                if final_sample is None
-                else final_sample.get("controller_goal_event")
+            "state_estimate_goal_reached_any_time": (
+                self.state_estimate_goal_reached_at is not None
             ),
-            "controller_goal_event_count": (
-                0
-                if final_sample is None
-                else final_sample.get("controller_goal_event_count", 0)
+            "state_estimate_final_within_goal_tolerance": (
+                state_estimate_final_within_tolerance
+            ),
+            "state_estimate_final_error_m": state_estimate_final_error,
+            # A terminal controller event can arrive between the last regular
+            # evaluation sample and shutdown.  Use the live event cache here
+            # so a goal-confirmation timeout remains visible in the summary.
+            "controller_goal_event": self.latest_controller_goal_event,
+            "controller_goal_event_count": self.controller_goal_event_count,
+            "controller_goal_latched": self.controller_goal_latched,
+            "controller_latched_without_physical_completion": (
+                controller_latched_without_physical_completion
+            ),
+            "controller_goal_failed": self.controller_goal_failed,
+            "goal_state": self.latest_goal_state,
+            "confirmation_start_time_s": self.latest_confirmation_start_time_s,
+            "confirmation_duration_s": self.latest_confirmation_duration_s,
+            "confirmation_timeout_count": self.goal_confirmation_timeout_count,
+            "final_approach_reentry_count": self.final_approach_reentry_count,
+            "goal_confirmation_timeout": (
+                self.goal_confirmation_timeout_count > 0
             ),
             "controller_goal_event_history": json.dumps(
                 self.controller_goal_events,
@@ -987,7 +1136,7 @@ class EvaluationLogger(Node):
             # not comparable with the full initial plan length.
             "path_efficiency": (
                 None
-                if self.goal_reached_at is None
+                if not terminal_success
                 or self.initial_planned_path_length is None
                 or self.travelled_distance <= 0.0
                 else self.initial_planned_path_length / self.travelled_distance
@@ -997,7 +1146,7 @@ class EvaluationLogger(Node):
             # shorter discrete path.
             "path_length_ratio": (
                 None
-                if self.goal_reached_at is None
+                if not terminal_success
                 or self.initial_planned_path_length is None
                 or self.initial_planned_path_length <= 0.0
                 else self.travelled_distance / self.initial_planned_path_length
@@ -1013,7 +1162,7 @@ class EvaluationLogger(Node):
                 self.configured_effective_planning_radius
             ),
             "configured_experiment_timeout_s": self.configured_experiment_timeout,
-            "termination_reason": self.termination_reason or "external_interrupt",
+            "termination_reason": termination_reason,
             "minimum_clearance_m": (
                 None
                 if math.isinf(self.minimum_clearance)
@@ -1091,8 +1240,11 @@ class EvaluationLogger(Node):
                 "state_estimate_x_m",
                 "state_estimate_y_m",
                 "ground_truth_goal_error_m",
+                "ground_truth_goal_within_tolerance",
                 "navigation_goal_error_m",
+                "navigation_goal_within_tolerance",
                 "state_estimate_goal_error_m",
+                "state_estimate_goal_within_tolerance",
                 "yaw_rad",
                 "goal_x_m",
                 "goal_y_m",
@@ -1115,6 +1267,15 @@ class EvaluationLogger(Node):
                 "localization_score_improvement_m",
                 "controller_goal_event",
                 "controller_goal_event_count",
+                "controller_goal_latched",
+                "controller_latched_without_physical_completion",
+                "controller_goal_failed",
+                "goal_state",
+                "confirmation_start_time_s",
+                "confirmation_duration_s",
+                "confirmation_timeout_count",
+                "final_approach_reentry_count",
+                "goal_confirmation_timeout",
                 "controller_goal_event_history",
                 "odom_receipt_age_s",
                 "navigation_receipt_age_s",
