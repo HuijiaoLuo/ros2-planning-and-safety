@@ -125,6 +125,9 @@ def main() -> None:
         y_min, y_max = base_y_min, base_y_max
 
     figure, axis = plt.subplots(figsize=(8.0, 5.0), dpi=120)
+    # Reserve a dedicated strip below the axes for the legend. Keeping it
+    # outside the map prevents it from covering the goal or the final turn.
+    figure.subplots_adjust(left=0.11, right=0.98, top=0.88, bottom=0.27)
     axis.set_aspect("equal", adjustable="box")
     axis.set_xlim(x_min, x_max)
     axis.set_ylim(y_min, y_max)
@@ -216,8 +219,12 @@ def main() -> None:
             "physical /odom trajectory",
             "robot",
         ],
-        loc="lower right",
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+        ncol=3,
         fontsize=8,
+        framealpha=0.9,
+        borderaxespad=0.0,
     )
 
     indices = frame_indices(len(trace), max(2, args.max_frames))
