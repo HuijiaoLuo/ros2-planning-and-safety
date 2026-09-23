@@ -8,6 +8,11 @@ from nav_msgs.msg import OccupancyGrid
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
+from robotics_nav.scenario_profiles import (
+    build_occupancy_data,
+    get_scenario_profile,
+)
+
 
 class StaticMapPublisher(Node):
     """Publish a map aligned with the obstacle in the Gazebo world."""
@@ -22,6 +27,7 @@ class StaticMapPublisher(Node):
         self.declare_parameter("origin_y", -3.0)
         self.declare_parameter("frame_id", "map")
         self.declare_parameter("publish_rate_hz", 1.0)
+        self.declare_parameter("scenario", "baseline_obstacle")
 
         self.width = int(self.get_parameter("width").value)
         self.height = int(self.get_parameter("height").value)
@@ -30,6 +36,8 @@ class StaticMapPublisher(Node):
         self.origin_y = float(self.get_parameter("origin_y").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
         publish_rate = float(self.get_parameter("publish_rate_hz").value)
+        self.scenario_name = str(self.get_parameter("scenario").value)
+        self.scenario = get_scenario_profile(self.scenario_name)
 
         map_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -41,14 +49,16 @@ class StaticMapPublisher(Node):
         self.message = self.build_map()
         self.timer = self.create_timer(1.0 / publish_rate, self.publish_map)
         self.publish_map()
+        self.get_logger().info(
+            f"Publishing scenario '{self.scenario.name}': {self.scenario.description}"
+        )
 
     def build_map(self) -> OccupancyGrid:
         """Build the deterministic map used by the simulation experiments.
 
-        The obstacle coordinates are kept aligned with the Gazebo world, and
-        the boundary cells are occupied so the planner cannot route outside
-        the published map. The message is cached because only its timestamp
-        changes between publications.
+        The obstacle geometry comes from the shared scenario profile used by
+        the Gazebo world renderer. The message is cached because only its
+        timestamp changes between publications.
         """
         message = OccupancyGrid()
         message.header.frame_id = self.frame_id
@@ -59,46 +69,15 @@ class StaticMapPublisher(Node):
         message.info.origin.position.y = self.origin_y
         message.info.origin.orientation.w = 1.0
 
-        data = [0] * (self.width * self.height)
-
-        # Match the obstacle box in robotics_sim/worlds/differential_drive.sdf.
-        self.mark_rectangle(
-            data,
-            x_min=0.85,
-            x_max=1.15,
-            y_min=-0.50,
-            y_max=0.50,
-            value=100,
+        message.data = build_occupancy_data(
+            self.scenario,
+            width=self.width,
+            height=self.height,
+            resolution_m=self.resolution,
+            origin_x_m=self.origin_x,
+            origin_y_m=self.origin_y,
         )
-
-        # Keep the outer boundary occupied so future planners cannot leave the map.
-        for x in range(self.width):
-            data[x] = 100
-            data[(self.height - 1) * self.width + x] = 100
-        for y in range(self.height):
-            data[y * self.width] = 100
-            data[y * self.width + self.width - 1] = 100
-
-        message.data = data
         return message
-
-    def mark_rectangle(
-        self,
-        data: list[int],
-        *,
-        x_min: float,
-        x_max: float,
-        y_min: float,
-        y_max: float,
-        value: int,
-    ) -> None:
-        """Rasterize a world-coordinate rectangle into occupancy cells."""
-        for row in range(self.height):
-            y = self.origin_y + (row + 0.5) * self.resolution
-            for column in range(self.width):
-                x = self.origin_x + (column + 0.5) * self.resolution
-                if x_min <= x <= x_max and y_min <= y <= y_max:
-                    data[row * self.width + column] = value
 
     def publish_map(self) -> None:
         self.message.header.stamp = self.get_clock().now().to_msg()

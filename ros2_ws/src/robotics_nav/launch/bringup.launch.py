@@ -4,10 +4,12 @@ from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch.substitutions import LaunchConfiguration, PythonExpression
 
 
 def generate_launch_description():
+    scenario = LaunchConfiguration("scenario")
     evaluation_output = LaunchConfiguration("evaluation_output")
     trace_output = LaunchConfiguration("trace_output")
     plan_output = LaunchConfiguration("plan_output")
@@ -207,6 +209,14 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                "scenario",
+                default_value="baseline_obstacle",
+                description=(
+                    "Shared map/Gazebo scene profile used by the static map "
+                    "publisher and simulation launch."
+                ),
+            ),
             DeclareLaunchArgument(
                 "evaluation_output",
                 default_value="",
@@ -1171,7 +1181,10 @@ def generate_launch_description():
                 name="static_map_publisher",
                 output="screen",
                 parameters=[
-                    {"frame_id": localization_map_frame_id},
+                    {
+                        "frame_id": localization_map_frame_id,
+                        "scenario": scenario,
+                    },
                 ],
             ),
             Node(
@@ -1204,6 +1217,8 @@ def generate_launch_description():
                         "trace_output": trace_output,
                         "plan_output": plan_output,
                         "map_output": map_output,
+                        "scenario": scenario,
+                        "localization_backend": localization_backend,
                         "collision_topic": LaunchConfiguration("collision_topic"),
                         "minimum_clearance": minimum_clearance,
                         "sensor_latency": sensor_latency,
@@ -1212,7 +1227,12 @@ def generate_launch_description():
                         "scan_noise_seed": scan_noise_seed,
                         "safety_margin": safety_margin,
                         "planning_radius_m": planning_radius_m,
-                        "experiment_timeout_s": experiment_timeout_s,
+                        # Force the LaunchConfiguration string to a DOUBLE so
+                        # both ``:=120`` and ``:=120.0`` are accepted by the
+                        # evaluation logger's typed ROS parameter.
+                        "experiment_timeout_s": ParameterValue(
+                            experiment_timeout_s, value_type=float
+                        ),
                         "navigation_pose_topic": navigation_pose_topic,
                         "goal_event_topic": goal_event_topic,
                         "use_sim_time": True,

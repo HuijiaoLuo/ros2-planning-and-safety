@@ -1112,6 +1112,21 @@ obstacle center ≈ (1, 0)
 The expected result is a safe route around the obstacle, with the safety layer
 overriding forward motion whenever the measured clearance becomes unsafe.
 
+### Scenario profiles
+
+The shared scenario profile in
+`ros2_ws/src/robotics_nav/robotics_nav/scenario_profiles.py` defines the
+obstacle rectangles used by both the static `/map` publisher and the Gazebo
+world. Select a profile with:
+
+~~~bash
+ros2 launch robotics_sim sim.launch.py scenario:=l_corridor
+~~~
+
+The current profiles are `baseline_obstacle`, `l_corridor`, and
+`symmetric_corridor`. The default remains `baseline_obstacle`, so existing
+baseline commands retain their original geometry.
+
 ## 9. Launch sequence
 
 When running:
@@ -1122,7 +1137,8 @@ ros2 launch robotics_sim sim.launch.py
 
 ROS2 starts the processes in parallel:
 
-1. Gazebo loads the SDF world and starts physics.
+1. The launch file renders the selected scenario into a temporary SDF, then
+   Gazebo loads that world and starts physics.
 2. The bridge creates the ROS/Gazebo topic translations.
 3. The path follower waits for /plan and ground-truth /odom.
 4. The safety supervisor waits for /scan and /cmd_vel_raw.

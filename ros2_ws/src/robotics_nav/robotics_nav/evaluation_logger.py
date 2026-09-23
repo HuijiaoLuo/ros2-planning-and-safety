@@ -43,6 +43,8 @@ class EvaluationLogger(Node):
         self.declare_parameter("trace_output", "")
         self.declare_parameter("plan_output", "")
         self.declare_parameter("map_output", "")
+        self.declare_parameter("scenario", "baseline_obstacle")
+        self.declare_parameter("localization_backend", "v4")
         self.declare_parameter("collision_topic", "/collision/contacts")
         self.declare_parameter("safety_override_topic", "/safety_override")
         self.declare_parameter("minimum_clearance", 0.50)
@@ -100,6 +102,10 @@ class EvaluationLogger(Node):
         self.trace_output = str(self.get_parameter("trace_output").value)
         self.plan_output = str(self.get_parameter("plan_output").value)
         self.map_output = str(self.get_parameter("map_output").value)
+        self.scenario = str(self.get_parameter("scenario").value)
+        self.localization_backend = str(
+            self.get_parameter("localization_backend").value
+        )
         self.collision_topic = str(self.get_parameter("collision_topic").value)
         self.configured_minimum_clearance = float(
             self.get_parameter("minimum_clearance").value
@@ -1112,6 +1118,8 @@ class EvaluationLogger(Node):
                 ground_truth_final_within_tolerance
             ),
             "navigation_pose_topic": self.navigation_pose_topic,
+            "scenario": self.scenario,
+            "localization_backend": self.localization_backend,
             "navigation_pose_goal_reached": (
                 self.navigation_goal_reached_at is not None
             ),

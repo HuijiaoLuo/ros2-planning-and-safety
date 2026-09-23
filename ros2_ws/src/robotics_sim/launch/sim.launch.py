@@ -1,18 +1,32 @@
 import os
+from pathlib import Path
+import tempfile
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    IncludeLaunchDescription,
+    OpaqueFunction,
+)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration
+
+from robotics_nav.scenario_profiles import get_scenario_profile, render_world
 
 
 def generate_launch_description():
     sim_share = get_package_share_directory("robotics_sim")
     nav_share = get_package_share_directory("robotics_nav")
-    world_path = os.path.join(sim_share, "worlds", "differential_drive.sdf")
+    world_template_path = os.path.join(
+        sim_share,
+        "worlds",
+        "differential_drive.sdf",
+    )
     nav_launch_path = os.path.join(nav_share, "launch", "bringup.launch.py")
+    scenario = LaunchConfiguration("scenario")
     evaluation_output = LaunchConfiguration("evaluation_output")
     trace_output = LaunchConfiguration("trace_output")
     plan_output = LaunchConfiguration("plan_output")
@@ -211,8 +225,35 @@ def generate_launch_description():
     wheel_speed_noise_std_m_s = LaunchConfiguration("wheel_speed_noise_std_m_s")
     nis_gate_threshold = LaunchConfiguration("nis_gate_threshold")
 
+    def launch_world(context):
+        """Render the selected obstacle profile before starting Gazebo."""
+
+        scenario_name = scenario.perform(context)
+        profile = get_scenario_profile(scenario_name)
+        template = Path(world_template_path).read_text(encoding="utf-8")
+        rendered_world = render_world(template, profile)
+        generated_world_path = (
+            Path(tempfile.gettempdir())
+            / f"robotics_{profile.name}_{os.getpid()}.sdf"
+        )
+        generated_world_path.write_text(rendered_world, encoding="utf-8")
+        return [
+            ExecuteProcess(
+                cmd=["gz", "sim", "-r", str(generated_world_path)],
+                output="screen",
+            )
+        ]
+
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                "scenario",
+                default_value="baseline_obstacle",
+                description=(
+                    "Shared map/Gazebo scene profile. Supported values: "
+                    "baseline_obstacle, l_corridor, symmetric_corridor."
+                ),
+            ),
             DeclareLaunchArgument(
                 "evaluation_output",
                 default_value="",
@@ -887,10 +928,7 @@ def generate_launch_description():
                 default_value="0.0",
                 description="Optional total evaluation timeout; zero disables it.",
             ),
-            ExecuteProcess(
-                cmd=["gz", "sim", "-r", world_path],
-                output="screen",
-            ),
+            OpaqueFunction(function=launch_world),
             Node(
                 package="ros_gz_bridge",
                 executable="parameter_bridge",
@@ -909,6 +947,7 @@ def generate_launch_description():
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(nav_launch_path),
                 launch_arguments={
+                    "scenario": scenario,
                     "evaluation_output": evaluation_output,
                     "trace_output": trace_output,
                     "plan_output": plan_output,

@@ -130,6 +130,46 @@ ros2 launch robotics_sim sim.launch.py \
   evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/robustness_case.csv
 ```
 
+Select one of the controlled geometry profiles with `scenario`:
+
+```bash
+ros2 launch robotics_sim sim.launch.py \
+  scenario:=l_corridor \
+  experiment_timeout_s:=120.0 \
+  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/l_corridor.csv
+```
+
+Available profiles are `baseline_obstacle`, `l_corridor`, and
+`symmetric_corridor`. The selected profile is recorded in the evaluation CSV
+and drives both the Gazebo obstacles and the published `/map`.
+
+To run the first fixed localization matrix from a ROS 2 shell:
+
+```bash
+python3 tools/run_localization_matrix.py --dry-run
+python3 tools/run_localization_matrix.py
+python3 tools/summarize_localization_matrix.py
+```
+
+The default matrix contains three scenarios, three localization backends, and
+three seeds. Each run writes metrics, diagnostics, and a `*_launch.log` under
+`results/localization_matrix/`. The runner only marks a run complete when the
+evaluation and estimator files contain samples; a clean ROS exit alone is not
+enough. Use `--dry-run` to inspect the commands first, or isolate one smoke
+run before the full matrix:
+
+```bash
+python3 tools/run_localization_matrix.py \
+  --scenarios baseline_obstacle \
+  --backends v4 \
+  --seeds 0 \
+  --output-dir results/smoke_baseline_v4 \
+  --stop-on-error
+```
+
+If the smoke run is incomplete, inspect its `*_launch.log` and the
+`matrix_manifest.csv` failure reason before rerunning the full matrix.
+
 The complete validation protocol, launch parameters, trace fields, and
 diagnostic interpretation are in [`METHOD_TECH.md`](METHOD_TECH.md).
 
