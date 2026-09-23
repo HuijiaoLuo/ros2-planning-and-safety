@@ -146,20 +146,21 @@ For a candidate received at time $t_m$, it inserts the position update at the
 corresponding point in that stream:
 
 $$
+\begin{aligned}
 \mathbf{x}_{m}^{+}
-=
-\mathbf{x}_{m}^{-}
-+
-K_m\left(\mathbf{z}_m-H\mathbf{x}_{m}^{-}\right),
+&=\mathbf{x}_{m}^{-}
++K_m\left(\mathbf{z}_m-H\mathbf{x}_{m}^{-}\right).
+\end{aligned}
 $$
 
 and then reapplies the subsequent motion events to obtain the current state:
 
 $$
+\begin{aligned}
 \mathbf{x}_{k}
-=
-f_{k}\left(\dots f_{m+1}
+&=f_{k}\left(\dots f_{m+1}
 \left(\mathbf{x}_{m}^{+},u_{m+1}\right)\dots,u_k\right).
+\end{aligned}
 $$
 
 The corresponding covariance is replayed through the same prediction and

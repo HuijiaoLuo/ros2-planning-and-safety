@@ -96,9 +96,10 @@ $$
 
 $$
 R_{\mathrm{wheel},k}
-=\mathrm{clip}\left(
-\widehat{S}_{k}-P_k^-,R_{\min},R_{\max}
-\right),
+=\min\left(
+R_{\max},
+\max\left(R_{\min},\widehat{S}_{k}-P_k^-\right)
+\right).
 $$
 
 where

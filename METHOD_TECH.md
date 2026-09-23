@@ -312,7 +312,11 @@ $$
 The wheel measurement variance is then updated as
 
 $$
-R_{\mathrm{wheel},k} = \mathrm{clip}(\widehat{S}_{k} - P_{k}^{-}, R_{\min}, R_{\max})
+R_{\mathrm{wheel},k}
+= \min\left(
+R_{\max},
+\max\left(R_{\min},\widehat{S}_{k}-P_{k}^{-}\right)
+\right).
 $$
 
 Here $\nu_{k}$ is measured in radians, while $\widehat{S}_{k}$, $P_{k}^{-}$,
@@ -453,9 +457,12 @@ prior, search-boundary flag, and score decomposition, so an apparently low
 score is not confused with a unique physical match. The selected objective is
 
 $$
-J = e_{\mathrm{scan}}
-+ w_{\mathrm{prior}}\left(\Delta x^2 + \Delta y^2\right)
-+ w_{\mathrm{yaw}}\Delta\theta^2,
+\begin{aligned}
+J
+&= e_{\mathrm{scan}} \\
+&\quad + w_{\mathrm{prior}}\left(\Delta x^2 + \Delta y^2\right) \\
+&\quad + w_{\mathrm{yaw}}\Delta\theta^2.
+\end{aligned}
 $$
 
 where $e_{\mathrm{scan}}$ is the mean LiDAR/map residual, and

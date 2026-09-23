@@ -81,7 +81,10 @@ likelihood field:
 $$
 \mathbf{p}_{i}^{\mathrm{map},(j)}
 =
-\begin{bmatrix}x^{(j)} \\ y^{(j)}\end{bmatrix}
+\begin{bmatrix}
+x^{(j)} \\
+y^{(j)}
+\end{bmatrix}
 + R\left(\theta^{(j)}\right)
 \begin{bmatrix}
 r_i\cos\left(\alpha_i\right) \\

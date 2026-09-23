@@ -34,18 +34,21 @@ $$
 The corresponding map-frame endpoint is
 
 $$
-\mathbf{p}_i^{\mathrm{map}}(\mathbf{x}) =
+\begin{aligned}
+\mathbf{p}_i^{\mathrm{map}}(\mathbf{x})
+&=
 \begin{bmatrix}
 x\\
 y
 \end{bmatrix}
-+ R(\theta)\mathbf{p}_i^{\mathrm{lidar}},
-\qquad
-R(\theta) =
++ R(\theta)\mathbf{p}_i^{\mathrm{lidar}},\\[4pt]
+R(\theta)
+&=
 \begin{bmatrix}
 \cos(\theta) & -\sin(\theta)\\
 \sin(\theta) & \cos(\theta)
 \end{bmatrix}.
+\end{aligned}
 $$
 
 The sign is positive because this is the forward transform from the LiDAR
