@@ -1696,23 +1696,26 @@ The current limitations are equally important:
 - the bounded local matcher is not full ICP, SLAM, loop closure, or globally
   observable localization.
 
-### V5 probabilistic localization direction
+### Probabilistic known-map localization
 
-The next localization backend is being developed separately from the frozen
-V4 implementation. V5 uses known-map Monte Carlo Localization: wheel/IMU
-increments propagate a particle set, LiDAR endpoints receive likelihood-field
-weights from the occupancy map, and systematic resampling maintains plausible
-pose hypotheses. The weighted pose, covariance, effective sample size, and
-normalized entropy expose ambiguity instead of selecting one local minimum.
+The probabilistic localization backend is developed separately from the frozen
+deterministic local matcher. It uses known-map Monte Carlo Localization:
+wheel/IMU increments propagate a particle set, LiDAR endpoints receive
+likelihood-field weights from the occupancy map, and systematic resampling
+maintains plausible pose hypotheses. The weighted pose, covariance, effective
+sample size, and normalized entropy expose ambiguity instead of selecting one
+local minimum.
 
 The dependency-free mathematical core is in
 `ros2_ws/src/robotics_nav/robotics_nav/mcl_localization.py` and is tested
-without Gazebo. It is not SLAM: the map is still assumed known and static.
-The ROS adapter will preserve the V4 localization interface so that controller
-and evaluation behavior can be compared without changing their parameters.
-V4 remains the deterministic local-matcher baseline; V5 is evaluated across
-different maps and tasks with the same frozen configuration rather than tuned
-until one map succeeds.
+without Gazebo. The ROS adapter is `mcl_localizer`; selecting
+`localization_backend:=mcl` preserves the existing `/localized_estimate`
+contract while replacing only the localization model. It is not SLAM: the map
+is still assumed known and static, and the first adapter assumes map/odom
+alignment. Controller and evaluation behavior can therefore be compared
+without changing their parameters. The deterministic local matcher remains the
+baseline; the particle model is evaluated across different maps and tasks
+with the same frozen configuration rather than tuned until one map succeeds.
 
 The next layers are intentionally separated so that each experiment remains
 interpretable:

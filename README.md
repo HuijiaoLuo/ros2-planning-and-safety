@@ -217,15 +217,12 @@ Confirmation also requires the consumed navigation pose to be recent and the
 estimated planar speed to be below the configured confirmation limit, so a
 moving or stale estimate cannot directly latch the goal.
 
-### V5 localization model in progress
+### Probabilistic localization
 
-V5 starts a separate known-map Monte Carlo Localization (MCL) backend rather
-than adding more V4 threshold tuning. Its dependency-free core maintains
-multiple pose hypotheses, applies wheel/IMU motion noise, scores LiDAR
-endpoints with an occupancy-map likelihood field, and reports covariance,
-effective sample size, and ambiguity. The core and tests are documented in
-[`V5_MCL.md`](V5_MCL.md); the ROS adapter and V4/V5 cross-map comparison remain
-next steps. V5 is not SLAM because the map is still assumed known and static.
+An experimental known-map particle-filter localizer is available as an
+alternative to the deterministic local matcher. It maintains multiple pose
+hypotheses and reports covariance and ambiguity; see
+[`MCL_LOCALIZATION.md`](MCL_LOCALIZATION.md) for the model and limitations.
 
 ## Quick start
 

@@ -1,26 +1,27 @@
-# V5: probabilistic known-map localization
+# Probabilistic known-map localization
 
-V5 replaces the V4 single-candidate local grid correction with a Monte Carlo
-localization backend. The map is still known and static; V5 is therefore not
-SLAM. The goal is to test whether a multi-hypothesis localization model handles
-map ambiguity more honestly and more generally than a local optimizer.
+This document describes a Monte Carlo localization backend that replaces the
+single-candidate local grid correction for controlled experiments. The map is
+still known and static, so this is not SLAM. The goal is to test whether a
+multi-hypothesis model handles map ambiguity more honestly and more generally
+than a local optimizer.
 
 ## Why this is the next model
 
-The last V4 run (`v4_goal_fsm_heading_lock_v2`) produced three confirmation
+The last deterministic-matcher run (`v4_goal_fsm_heading_lock_v2`) produced three confirmation
 timeouts and three final-approach re-entries. Only three LiDAR matches were
 accepted, while the local matcher reported many ambiguous or uncertainty-gated
 candidates. The physical final error was about `0.136 m`, despite the estimated
 poses entering the goal region. This is evidence of a model limitation, not a
 reason to keep sweeping score thresholds.
 
-V4 selects one nearby minimum:
+The deterministic matcher selects one nearby minimum:
 
 ```text
 wheel/IMU pose + local scan search -> one corrected pose
 ```
 
-V5 maintains a distribution:
+The particle filter maintains a distribution:
 
 ```text
 wheel/IMU motion prior -> particle prediction
@@ -87,10 +88,10 @@ than hidden behind one apparently precise local minimum.
 
 ## Validation policy
 
-The V5 baseline configuration is frozen before map comparisons. The map and
+The baseline configuration is frozen before map comparisons. The map and
 task are the validation variables, not reasons to retune the filter until a
 single case succeeds. The same seeds and sensor configuration should be used
-for V4 and V5 on:
+for both localization backends on:
 
 - an open room;
 - an L corridor;
@@ -107,9 +108,18 @@ this probabilistic baseline or be presented as SLAM.
 
 ## Current scope and next implementation step
 
-The current V5 milestone is the tested mathematical core. The next step is a
-ROS adapter that consumes `/state_estimate`, `/scan`, and `/map`, preserves
-source timestamps, and publishes the same `/localized_estimate` contract as
-V4. The controller will remain unchanged for the first A/B comparison. This
-keeps localization-model effects separate from controller and terminal-state
-logic.
+The first ROS adapter is now available as `mcl_localizer`. It consumes
+`/state_estimate`, `/scan`, and `/map`, preserves the source pose timestamp,
+and publishes the same `/localized_estimate` contract as the deterministic
+matcher. Select it with `localization_backend:=mcl`; the default deterministic
+backend remains unchanged.
+The first adapter assumes the simulator's `map` and `odom` coordinates are
+aligned. It does not yet estimate a general map-to-odom transform or perform
+global relocalization.
+
+The adapter writes `mcl_update` records containing update latency, valid beam
+count, ESS, normalized entropy, resampling, and correction magnitude. Use
+`tools/summarize_mcl_diagnostics.py` for the particle-filter summary; the
+local-matcher replay tool is intentionally not used for these records. The
+controller remains unchanged for the first A/B comparison, keeping
+localization-model effects separate from controller and terminal-state logic.
