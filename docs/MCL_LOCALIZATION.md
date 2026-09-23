@@ -382,9 +382,9 @@ for both localization backends on:
 
 The comparison must include physical final error, strict terminal success,
 false terminal success, confirmation deadlock, localization latency, pose age,
-covariance coverage, ESS/entropy, collision, and safety intervention. ICP can
-later be added as a second localization baseline, but it should not replace
-this probabilistic baseline or be presented as SLAM.
+covariance coverage, ESS/entropy, collision, and safety intervention. An
+Iterative Closest Point (ICP) baseline can later be compared with this
+probabilistic baseline, but it should not replace it or be presented as SLAM.
 
 ## Current scope and next implementation step
 

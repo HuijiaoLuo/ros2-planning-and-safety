@@ -7,7 +7,7 @@ navigation baseline.
 ## Data flow
 
 ```text
-/state_estimate + /scan + /map
+/state_prediction + /scan + /map
               ↓
        lidar_localizer
               ↓
@@ -19,11 +19,12 @@ close to the true pose, and a sufficiently observable local scene. It does not
 consume Gazebo ground-truth `/odom`.
 
 The repository also contains an independent `localization_backend:=icp`
-baseline. It keeps the same input/output topic contract but replaces the
-ray-casting/grid objective with deterministic point-to-point registration. Its
-model and limitations are documented in
-[`ICP_LOCALIZATION.md`](ICP_LOCALIZATION.md). The ICP backend is a controlled
-model comparison, not a claim that the current system provides SLAM.
+baseline based on point-to-point Iterative Closest Point (ICP) registration.
+It keeps the same input/output topic contract but replaces the ray-casting/grid
+objective with deterministic point registration. Its model and limitations are
+documented in [`ICP_LOCALIZATION.md`](ICP_LOCALIZATION.md). The ICP backend is
+a controlled model comparison, not a claim that the current system provides
+SLAM.
 
 ## Local scan-to-map objective
 

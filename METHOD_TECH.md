@@ -39,8 +39,9 @@ map geometry and local observability more generally.
 Focused notes are split by topic: [`docs/STATE_ESTIMATION.md`](docs/STATE_ESTIMATION.md)
 for transparent wheel/IMU fusion, [`docs/POSE_EKF.md`](docs/POSE_EKF.md) for
 covariance-aware pose estimation, and [`docs/LOCALIZATION.md`](docs/LOCALIZATION.md)
-for the gated LiDAR-to-map matcher. The independent point-registration
-comparison is described in [`docs/ICP_LOCALIZATION.md`](docs/ICP_LOCALIZATION.md).
+for the gated LiDAR-to-map matcher. The independent point-to-point Iterative
+Closest Point (ICP) comparison is described in
+[`docs/ICP_LOCALIZATION.md`](docs/ICP_LOCALIZATION.md).
 
 ## 1. Problem definition
 
@@ -370,7 +371,7 @@ The optional `lidar_localizer` provides a small absolute-position
 correction using the known static map:
 
 ```text
-/state_estimate + /scan + /map → /localized_estimate
+/state_prediction + /scan + /map → /localized_estimate
 ```
 
 For a valid range return $r_i$ at scan angle $\alpha_i$, a candidate pose
@@ -440,28 +441,28 @@ from matching the supporting infinite line outside the finite map segment.
 The pose search still minimizes the same regularized objective $J$ over a
 bounded local grid.
 
-The optimizer is a bounded derivative-free search. `grid` exhaustively
+The optimizer is a bounded, derivative-free search. `grid` exhaustively
 evaluates the configured circular x/y grid and is the reference behavior.
 `coarse_to_fine` is a **multi-resolution grid search**: it first evaluates a
 coarser global grid, then refines the best few basins at the nominal
-resolution. This is not the numerical-PDE meaning of multigrid. It does not
-assume differentiability;
-the occupancy-grid objective contains discontinuities from ray hits, invalid
-returns, and residual clipping. Audit records expose the second-best score,
-score margin, candidate distance from the prior, search-boundary flag, and
-score decomposition so an apparently low score is not confused with a unique
-physical match. The selected objective is
+resolution. This is not the numerical-PDE meaning of multigrid. Neither mode
+assumes differentiability: the occupancy-grid objective contains
+discontinuities from ray hits, invalid returns, and residual clipping. Audit
+records expose the second-best score, score margin, candidate distance from the
+prior, search-boundary flag, and score decomposition, so an apparently low
+score is not confused with a unique physical match. The selected objective is
 
 $$
-J = e_{\mathrm{scan}} +
-w_{mathrm{prior}}\left(\Delta x^2+\Delta y^2\right)+
-w_{\mathrm{yaw}}\Delta\theta^2,
+J = e_{\mathrm{scan}}
++ w_{\mathrm{prior}}\left(\Delta x^2 + \Delta y^2\right)
++ w_{\mathrm{yaw}}\Delta\theta^2,
 $$
 
-where $e_{mathrm{scan}}$ is the mean LiDAR/map residual and the final two
-terms are regularizers relative to the input pose. The audit records both
-$J$ and $e_{mathrm{scan}}$, allowing the prior penalty to be inspected before
-changing its weight.
+where $e_{\mathrm{scan}}$ is the mean LiDAR/map residual, and
+$(\Delta x, \Delta y, \Delta\theta)$ is the candidate displacement relative
+to the input pose. The final two terms are regularizers, not additional sensor
+measurements. The audit records both $J$ and $e_{\mathrm{scan}}$, allowing the
+prior penalty to be inspected before changing its weight.
 
 Because a local scan matcher can select a plausible but incorrect nearby pose,
 the ROS node does not forward every raw match to the controller. It accepts a

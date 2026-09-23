@@ -1,4 +1,4 @@
-"""Dependency-free point-to-point ICP for a known occupancy map.
+"""Dependency-free point-to-point Iterative Closest Point (ICP) registration.
 
 This module is a deliberately small registration baseline, not a SLAM
 implementation.  It aligns valid LiDAR endpoints with occupied-cell centres

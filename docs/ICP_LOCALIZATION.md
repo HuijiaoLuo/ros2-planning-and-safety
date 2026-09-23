@@ -1,10 +1,10 @@
-# Point-to-point ICP localization baseline
+# Point-to-point Iterative Closest Point (ICP) localization baseline
 
-This document describes the independent registration baseline implemented in
-`icp_localization.py` and exposed by the `icp_localizer` ROS 2 node. It is a
-model comparison for the known-map localization layer. It is not a SLAM
-system: the map is fixed, the initial pose comes from wheel/IMU estimation,
-and the registration is local.
+This document describes the independent point-to-point Iterative Closest Point
+(ICP) registration baseline implemented in `icp_localization.py` and exposed
+by the `icp_localizer` ROS 2 node. It is a model comparison for the known-map
+localization layer. It is not a SLAM system: the map is fixed, the initial
+pose comes from wheel/IMU estimation, and the registration is local.
 
 ## Measurement model
 
@@ -20,12 +20,25 @@ r_i
 \end{bmatrix}.
 $$
 
-For a candidate planar pose
-`\mathbf{x} = (x, y, theta)`, its map-frame endpoint is
+For a candidate planar pose, write the state explicitly as
+
+$$
+\mathbf{x} =
+\begin{bmatrix}
+x\\
+y\\
+\theta
+\end{bmatrix}.
+$$
+
+The corresponding map-frame endpoint is
 
 $$
 \mathbf{p}_i^{\mathrm{map}}(\mathbf{x}) =
-\begin{bmatrix}x\\y\end{bmatrix}
+\begin{bmatrix}
+x\\
+y
+\end{bmatrix}
 + R(\theta)\mathbf{p}_i^{\mathrm{lidar}},
 \qquad
 R(\theta) =
@@ -34,6 +47,11 @@ R(\theta) =
 \sin(\theta) & \cos(\theta)
 \end{bmatrix}.
 $$
+
+The sign is positive because this is the forward transform from the LiDAR
+frame to the map frame: first rotate the measured ray by the robot heading,
+then translate it by the robot position `(x, y)`. A subtraction would describe
+an inverse-frame transform and is not the endpoint model used by this node.
 
 The current map representation is the set `Q` of centres of occupied grid
 cells. For each transformed scan point, ICP selects the nearest map point
@@ -85,7 +103,7 @@ intended to be the final performance implementation.
 The node consumes:
 
 ```text
-/state_estimate + /scan + /map
+/state_prediction + /scan + /map
                   |
                   v
         point-to-point ICP worker
@@ -94,12 +112,14 @@ The node consumes:
           /localized_estimate
 ```
 
-The state estimate is relayed at the control-rate publication frequency. ICP
-runs at a separate lower rate in a worker process, so registration does not
-block the wheel/IMU estimator or the controller. A converged result produces
-one timestamped `/localization_candidate` event and updates the persistent
-map-to-odom transform used for later relays. An unfinished or non-converged
-registration leaves the previous transform unchanged.
+The wheel/IMU-only `/state_prediction` is relayed at the control-rate
+publication frequency. ICP runs at a separate lower rate in a worker process,
+so registration does not block the wheel/IMU estimator or the controller. A
+converged result produces one timestamped `/localization_candidate` event and
+updates the persistent map-to-odom transform used for later relays. An
+unfinished or non-converged registration leaves the previous transform
+unchanged. The corrected localization stream is diagnostic in the current
+architecture; it is not fed back into the high-rate control loop.
 
 The JSONL diagnostic stream records the quantities needed to distinguish
 registration failure from execution failure:

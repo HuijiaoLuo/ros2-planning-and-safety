@@ -68,8 +68,9 @@ The current implementation includes:
   corrected `/state_estimate` output;
 - a known-map Monte Carlo localization backend with particle covariance,
   ambiguity, latency, and accepted-candidate diagnostics;
-- an independent point-to-point ICP map-registration baseline with auditable
-  correspondence, residual, convergence, and worker-latency diagnostics;
+- an independent point-to-point Iterative Closest Point (ICP) map-registration
+  baseline with auditable correspondence, residual, convergence, and
+  worker-latency diagnostics;
 - a covariance-aware pose EKF with x/y/yaw covariance, NIS gating, and
   wheel-measurement acceptance diagnostics;
 
