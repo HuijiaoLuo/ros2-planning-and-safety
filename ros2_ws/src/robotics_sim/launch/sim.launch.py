@@ -65,6 +65,9 @@ def generate_launch_description():
     localization_max_match_score_m = LaunchConfiguration(
         "localization_max_match_score_m"
     )
+    localization_max_candidate_mahalanobis_sq = LaunchConfiguration(
+        "localization_max_candidate_mahalanobis_sq"
+    )
     localization_correction_smoothing = LaunchConfiguration(
         "localization_correction_smoothing"
     )
@@ -105,6 +108,9 @@ def generate_launch_description():
     )
     localization_minimum_score_improvement_m = LaunchConfiguration(
         "localization_minimum_score_improvement_m"
+    )
+    localization_minimum_score_margin_m = LaunchConfiguration(
+        "localization_minimum_score_margin_m"
     )
     wheel_weight = LaunchConfiguration("wheel_weight")
     fusion_mode = LaunchConfiguration("fusion_mode")
@@ -292,7 +298,8 @@ def generate_launch_description():
                     "LiDAR-map score model: range preserves the baseline; "
                     "endpoint scores measured endpoints against occupied "
                     "cells; boundary scores against continuous "
-                    "occupied/free boundaries."
+                    "occupied/free boundaries; point_to_line uses "
+                    "nearest-boundary ICP-style normal residuals."
                 ),
             ),
             DeclareLaunchArgument(
@@ -351,6 +358,14 @@ def generate_launch_description():
                 description=(
                     "Reject a LiDAR-map match if its range residual exceeds "
                     "this score threshold."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "localization_max_candidate_mahalanobis_sq",
+                default_value="0.0",
+                description=(
+                    "Optional EKF covariance gate for LiDAR candidates; "
+                    "zero disables the gate."
                 ),
             ),
             DeclareLaunchArgument(
@@ -453,6 +468,14 @@ def generate_launch_description():
                 description=(
                     "Minimum reduction in mean scan residual required before "
                     "applying a candidate correction."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "localization_minimum_score_margin_m",
+                default_value="0.0",
+                description=(
+                    "Optional minimum score gap between the best and second-"
+                    "best LiDAR candidates; zero disables this ambiguity gate."
                 ),
             ),
             DeclareLaunchArgument(
@@ -625,6 +648,9 @@ def generate_launch_description():
                     "localization_max_total_correction_m": localization_max_total_correction_m,
                     "localization_robot_radius_m": localization_robot_radius_m,
                     "localization_max_match_score_m": localization_max_match_score_m,
+                    "localization_max_candidate_mahalanobis_sq": (
+                        localization_max_candidate_mahalanobis_sq
+                    ),
                     "localization_correction_smoothing": localization_correction_smoothing,
                     "localization_minimum_consecutive_matches": localization_minimum_consecutive_matches,
                     "localization_candidate_consistency_m": localization_candidate_consistency_m,
@@ -640,6 +666,7 @@ def generate_launch_description():
                     "localization_yaw_prior_weight": localization_yaw_prior_weight,
                     "localization_max_heading_correction_rad": localization_max_heading_correction_rad,
                     "localization_minimum_score_improvement_m": localization_minimum_score_improvement_m,
+                    "localization_minimum_score_margin_m": localization_minimum_score_margin_m,
                     "wheel_weight": wheel_weight,
                     "fusion_mode": fusion_mode,
                     "gyro_rate_noise_std_rad_s": gyro_rate_noise_std_rad_s,

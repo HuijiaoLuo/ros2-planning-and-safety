@@ -9,6 +9,7 @@ from typing import Optional
 import rclpy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry, Path
+from std_msgs.msg import Bool, String
 from rclpy.node import Node
 from rclpy.qos import (
     DurabilityPolicy,
@@ -32,6 +33,29 @@ def yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
         2.0 * (w * z + x * y),
         1.0 - 2.0 * (y * y + z * z),
     )
+
+
+def planar_position_sigma(message: Odometry) -> Optional[float]:
+    """Return the largest 1-sigma position uncertainty from x/y covariance.
+
+    The covariance is a 2-D ellipse in the pose message. Using its largest
+    eigenvalue avoids accepting a goal along the ellipse's most uncertain
+    direction, even when the diagonal entries alone look acceptable.
+    """
+    covariance = message.pose.covariance
+    if len(covariance) < 8:
+        return None
+    pxx = float(covariance[0])
+    pxy = 0.5 * (float(covariance[1]) + float(covariance[6]))
+    pyy = float(covariance[7])
+    if not all(math.isfinite(value) for value in (pxx, pxy, pyy)):
+        return None
+    trace = pxx + pyy
+    discriminant = math.sqrt(max(0.0, (pxx - pyy) ** 2 + 4.0 * pxy**2))
+    largest_variance = 0.5 * (trace + discriminant)
+    if largest_variance < 0.0:
+        return None
+    return math.sqrt(largest_variance)
 
 
 class PathFollower(Node):
@@ -58,6 +82,21 @@ class PathFollower(Node):
         self.declare_parameter("final_approach_max_angular_speed", 0.60)
         self.declare_parameter("heading_deadband", 0.03)
         self.declare_parameter("odom_topic", "/odom")
+        # When the controller follows a scan-corrected pose, a distance
+        # threshold alone can produce a false goal if the last correction is
+        # stale or ambiguous. Require a current valid localization match in
+        # that mode before latching the terminal stop.
+        self.declare_parameter("require_localization_match_for_goal", False)
+        self.declare_parameter("localization_match_valid_topic", "/localization_match_valid")
+        self.declare_parameter("localization_match_status_topic", "/localization_match_status")
+        self.declare_parameter("goal_confirmation_samples", 5)
+        # A scan matcher can produce a locally self-consistent pose that is
+        # still wrong in the global map. When navigation uses that corrected
+        # pose, also require the independent wheel/IMU estimate to be inside
+        # the goal tolerance before declaring success.
+        self.declare_parameter("goal_reference_topic", "/state_estimate")
+        self.declare_parameter("goal_reference_tolerance", -1.0)
+        self.declare_parameter("goal_reference_position_sigma_max_m", 0.15)
         # Grid paths contain sharp 90-degree corners. Rotate before driving
         # through a large heading error instead of cutting the corner.
         self.declare_parameter("rotate_in_place_threshold", math.pi / 6.0)
@@ -84,6 +123,37 @@ class PathFollower(Node):
             self.get_parameter("heading_deadband").value
         )
         odom_topic = str(self.get_parameter("odom_topic").value)
+        self.odom_topic = odom_topic
+        self.require_localization_match_for_goal = bool(
+            self.get_parameter("require_localization_match_for_goal").value
+        ) or odom_topic == "/localized_estimate"
+        localization_match_valid_topic = str(
+            self.get_parameter("localization_match_valid_topic").value
+        )
+        localization_match_status_topic = str(
+            self.get_parameter("localization_match_status_topic").value
+        )
+        self.goal_confirmation_samples = max(
+            1, int(self.get_parameter("goal_confirmation_samples").value)
+        )
+        self.goal_reference_topic = str(
+            self.get_parameter("goal_reference_topic").value
+        )
+        configured_reference_tolerance = float(
+            self.get_parameter("goal_reference_tolerance").value
+        )
+        self.goal_reference_tolerance = (
+            self.goal_tolerance
+            if configured_reference_tolerance <= 0.0
+            else configured_reference_tolerance
+        )
+        self.goal_reference_position_sigma_max_m = float(
+            self.get_parameter("goal_reference_position_sigma_max_m").value
+        )
+        self.require_goal_reference_for_goal = (
+            odom_topic == "/localized_estimate"
+            and self.goal_reference_topic != odom_topic
+        )
         self.rotate_in_place_threshold = float(
             self.get_parameter("rotate_in_place_threshold").value
         )
@@ -109,6 +179,29 @@ class PathFollower(Node):
             self.odom_callback,
             qos_profile_sensor_data,
         )
+        self.localization_valid_subscription = None
+        self.localization_status_subscription = None
+        if self.require_localization_match_for_goal:
+            self.localization_valid_subscription = self.create_subscription(
+                Bool,
+                localization_match_valid_topic,
+                self.localization_valid_callback,
+                10,
+            )
+            self.localization_status_subscription = self.create_subscription(
+                String,
+                localization_match_status_topic,
+                self.localization_status_callback,
+                10,
+            )
+        self.goal_reference_subscription = None
+        if self.require_goal_reference_for_goal:
+            self.goal_reference_subscription = self.create_subscription(
+                Odometry,
+                self.goal_reference_topic,
+                self.goal_reference_callback,
+                qos_profile_sensor_data,
+            )
         self.timer = self.create_timer(1.0 / publish_rate, self.control_loop)
 
         self.latest_path: Optional[Path] = None
@@ -120,6 +213,35 @@ class PathFollower(Node):
         # the terminal-stop state and command the robot to move again.
         self.goal_endpoint: Optional[tuple[float, float]] = None
         self.last_control_state: Optional[str] = None
+        self.received_odom = False
+        self.localization_match_valid: Optional[bool] = None
+        self.localization_match_status: Optional[str] = None
+        self.localization_accepted_events_since_entry = 0
+        self.in_goal_tolerance = False
+        self.latest_goal_reference: Optional[Odometry] = None
+        self.goal_confirmation_count = 0
+
+        self.get_logger().info(
+            "Path follower inputs: "
+            f"path=/plan, pose={self.odom_topic}, output=/cmd_vel_raw."
+        )
+        if self.require_localization_match_for_goal:
+            self.get_logger().info(
+                "Goal confirmation requires "
+                f"{self.goal_confirmation_samples} consecutive accepted "
+                "LiDAR match events after entering the goal tolerance."
+            )
+        if self.require_goal_reference_for_goal:
+            self.get_logger().info(
+                "Goal confirmation also requires "
+                f"{self.goal_reference_topic} within "
+                f"{self.goal_reference_tolerance:.3f} m."
+            )
+            self.get_logger().info(
+                "Goal confirmation also requires independent position "
+                "uncertainty <= "
+                f"{self.goal_reference_position_sigma_max_m:.3f} m (1-sigma)."
+            )
 
     def report_state(self, state: str) -> None:
         """Log only control-state transitions, not every timer tick."""
@@ -146,6 +268,9 @@ class PathFollower(Node):
                     # task, so a previous terminal-stop decision is invalid.
                     self.goal_reached = False
                     self.last_control_state = None
+                    self.goal_confirmation_count = 0
+                    self.in_goal_tolerance = False
+                    self.localization_accepted_events_since_entry = 0
             self.goal_endpoint = new_endpoint
             self.get_logger().info(
                 f"Received path with {len(message.poses)} poses; "
@@ -155,13 +280,65 @@ class PathFollower(Node):
             self.goal_endpoint = None
             self.goal_reached = False
             self.last_control_state = None
+            self.goal_confirmation_count = 0
+            self.in_goal_tolerance = False
+            self.localization_accepted_events_since_entry = 0
             self.get_logger().warn("Received an empty path.")
 
     def odom_callback(self, message: Odometry) -> None:
         self.latest_odom = message
+        if not self.received_odom:
+            self.received_odom = True
+            self.get_logger().info(
+                f"Received first pose message on {self.odom_topic}."
+            )
+
+    def localization_valid_callback(self, message: Bool) -> None:
+        """Store whether the latest scan-to-map match passed its gates."""
+        self.localization_match_valid = bool(message.data)
+
+    def localization_status_callback(self, message: String) -> None:
+        """Track fresh matcher events instead of sampling a latched Bool.
+
+        ``/localization_match_valid`` describes the latest matcher state and
+        can remain ``true`` between scans.  Counting control-loop ticks would
+        therefore mistake one accepted scan for many independent matches.
+        This callback counts only new ``accepted`` status messages, and a
+        rejected status clears the consecutive-event streak.
+        """
+        status = str(message.data)
+        self.localization_match_status = status
+        if status == "accepted":
+            if self.in_goal_tolerance:
+                self.localization_accepted_events_since_entry += 1
+        else:
+            self.localization_accepted_events_since_entry = 0
+
+    def goal_reference_callback(self, message: Odometry) -> None:
+        """Store the independent pose used to confirm a localized goal.
+
+        This reference is deliberately kept separate from the pose that
+        drives the controller. It is the wheel/IMU EKF estimate in the
+        localized-navigation experiments, so a single scan-matching local
+        minimum cannot satisfy both goal tests by construction.
+        """
+        self.latest_goal_reference = message
 
     def publish_stop(self) -> None:
-        self.publisher.publish(Twist())
+        # The evaluation logger may shut down the ROS context before this
+        # node's final stop callback runs.  The stop command is best effort at
+        # shutdown; never turn a clean experiment timeout into a process
+        # failure by publishing through an invalid context.
+        if not rclpy.ok():
+            return
+        try:
+            self.publisher.publish(Twist())
+        except Exception:
+            # The Python exception class differs across ROS 2 distributions.
+            # If the context is still live, let real publish failures surface;
+            # during shutdown, suppress the DDS teardown race only.
+            if rclpy.ok():
+                raise
 
     def select_target(self, _x: float, _y: float) -> Optional[tuple[float, float]]:
         """Select the first ordered waypoint at the configured lookahead.
@@ -207,7 +384,7 @@ class PathFollower(Node):
             return
 
         if self.latest_odom is None:
-            self.report_state("Waiting for /odom.")
+            self.report_state(f"Waiting for {self.odom_topic}.")
             self.publish_stop()
             return
 
@@ -238,6 +415,95 @@ class PathFollower(Node):
             self.publish_stop()
             return
         if goal_distance <= self.goal_tolerance:
+            if self.require_localization_match_for_goal:
+                if not self.in_goal_tolerance:
+                    # Start a new confirmation window. An accepted status
+                    # from before entering the goal does not count toward
+                    # terminal confirmation.
+                    self.in_goal_tolerance = True
+                    self.localization_accepted_events_since_entry = 0
+                if self.localization_match_valid is not True:
+                    self.goal_confirmation_count = 0
+                    self.localization_accepted_events_since_entry = 0
+                    self.report_state(
+                        "At estimated goal, waiting for a valid localization match."
+                    )
+                    self.publish_stop()
+                    return
+                if self.localization_match_status != "accepted":
+                    self.goal_confirmation_count = 0
+                    self.localization_accepted_events_since_entry = 0
+                    status = self.localization_match_status or "not_received"
+                    self.report_state(
+                        "At estimated goal, waiting for a fresh accepted "
+                        f"localization match; status={status}."
+                    )
+                    self.publish_stop()
+                    return
+            if self.require_goal_reference_for_goal:
+                if self.latest_goal_reference is None:
+                    self.goal_confirmation_count = 0
+                    self.localization_accepted_events_since_entry = 0
+                    self.report_state(
+                        f"At estimated goal, waiting for {self.goal_reference_topic}."
+                    )
+                    self.publish_stop()
+                    return
+                reference_position = self.latest_goal_reference.pose.pose.position
+                reference_distance = math.hypot(
+                    goal.x - reference_position.x,
+                    goal.y - reference_position.y,
+                )
+                if reference_distance > self.goal_reference_tolerance:
+                    self.goal_confirmation_count = 0
+                    self.localization_accepted_events_since_entry = 0
+                    self.report_state(
+                        "At localized goal, waiting for independent estimate; "
+                        f"distance={reference_distance:.3f} m."
+                    )
+                    self.publish_stop()
+                    return
+                reference_sigma = planar_position_sigma(self.latest_goal_reference)
+                if (
+                    reference_sigma is None
+                    or reference_sigma > self.goal_reference_position_sigma_max_m
+                ):
+                    self.goal_confirmation_count = 0
+                    self.localization_accepted_events_since_entry = 0
+                    sigma_text = (
+                        "unavailable"
+                        if reference_sigma is None
+                        else f"{reference_sigma:.3f} m"
+                    )
+                    self.report_state(
+                        "At localized goal, waiting for independent estimate "
+                        f"uncertainty; sigma={sigma_text}."
+                    )
+                    self.publish_stop()
+                    return
+            if self.require_localization_match_for_goal:
+                if (
+                    self.localization_accepted_events_since_entry
+                    < self.goal_confirmation_samples
+                ):
+                    self.goal_confirmation_count = 0
+                    self.report_state(
+                        "Confirming fresh LiDAR matches; "
+                        f"accepted={self.localization_accepted_events_since_entry}/"
+                        f"{self.goal_confirmation_samples}."
+                    )
+                    self.publish_stop()
+                    return
+            else:
+                self.goal_confirmation_count += 1
+                if self.goal_confirmation_count < self.goal_confirmation_samples:
+                    self.report_state(
+                        "Confirming goal distance; "
+                        f"sample={self.goal_confirmation_count}/"
+                        f"{self.goal_confirmation_samples}."
+                    )
+                    self.publish_stop()
+                    return
             if not self.goal_reached:
                 self.get_logger().info("Planned path goal reached.")
                 self.goal_reached = True
@@ -246,6 +512,9 @@ class PathFollower(Node):
             )
             self.publish_stop()
             return
+        self.goal_confirmation_count = 0
+        self.in_goal_tolerance = False
+        self.localization_accepted_events_since_entry = 0
 
         final_approach = goal_distance <= self.final_approach_distance
         if final_approach:

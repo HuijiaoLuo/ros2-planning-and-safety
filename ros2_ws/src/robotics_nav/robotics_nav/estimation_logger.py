@@ -228,6 +228,8 @@ class EstimationLogger(Node):
         self.trace_writer: Optional[csv.DictWriter] = None
         self.trace_sample_index = 0
         self.last_imu_stamp: Optional[float] = None
+        self.last_sample_truth_timestamp_s: Optional[float] = None
+        self.last_sample_estimate_timestamp_s: Optional[float] = None
         self.imu_received = False
         self.last_truth_stamp: Optional[tuple[int, int]] = None
         self.last_motion_truth: Optional[tuple[float, tuple[float, float, float]]] = None
@@ -662,6 +664,10 @@ class EstimationLogger(Node):
             estimate,
             motion_audit,
         )
+        self.last_sample_truth_timestamp_s = self.stamp_seconds(self.latest_truth)
+        self.last_sample_estimate_timestamp_s = self.stamp_seconds(
+            self.latest_estimate
+        )
         if self.imu_received and self.latest_imu_yaw is not None:
             self.imu_stats.add(
                 truth[0],
@@ -679,6 +685,17 @@ class EstimationLogger(Node):
         result.update(self.imu_stats.summary("imu"))
         result.update(self.estimate_stats.summary("estimate"))
         result["samples"] = self.estimate_stats.count
+        result["last_sample_truth_timestamp_s"] = self.last_sample_truth_timestamp_s
+        result["last_sample_estimate_timestamp_s"] = (
+            self.last_sample_estimate_timestamp_s
+        )
+        result["last_sample_estimate_timestamp_offset_s"] = (
+            None
+            if self.last_sample_truth_timestamp_s is None
+            or self.last_sample_estimate_timestamp_s is None
+            else self.last_sample_estimate_timestamp_s
+            - self.last_sample_truth_timestamp_s
+        )
         result["motion_audit_samples"] = self.motion_audit_samples
         result["motion_wheel_distance_m"] = self.motion_wheel_distance_m
         result["motion_model_distance_m"] = self.motion_model_distance_m
@@ -828,6 +845,15 @@ def main(args=None) -> None:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except RuntimeError as exc:
+        # During SIGINT, Jazzy can tear down a DDS subscription while the
+        # executor is converting the next queued message.  The resulting
+        # pybind11 conversion error is a shutdown race, not an estimation
+        # failure; the report is still finalized in the `finally` block.
+        # Preserve all other live RuntimeError failures.
+        conversion_race = "Unable to convert call argument" in str(exc)
+        if rclpy.ok() and not conversion_race:
+            raise
     except Exception:
         if rclpy.ok():
             raise

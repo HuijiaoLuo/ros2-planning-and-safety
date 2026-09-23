@@ -58,6 +58,9 @@ def generate_launch_description():
     localization_max_match_score_m = LaunchConfiguration(
         "localization_max_match_score_m"
     )
+    localization_max_candidate_mahalanobis_sq = LaunchConfiguration(
+        "localization_max_candidate_mahalanobis_sq"
+    )
     localization_correction_smoothing = LaunchConfiguration(
         "localization_correction_smoothing"
     )
@@ -98,6 +101,9 @@ def generate_launch_description():
     )
     localization_minimum_score_improvement_m = LaunchConfiguration(
         "localization_minimum_score_improvement_m"
+    )
+    localization_minimum_score_margin_m = LaunchConfiguration(
+        "localization_minimum_score_margin_m"
     )
     wheel_weight = LaunchConfiguration("wheel_weight")
     fusion_mode = LaunchConfiguration("fusion_mode")
@@ -311,7 +317,8 @@ def generate_launch_description():
                     "LiDAR-map score model: range preserves the baseline; "
                     "endpoint scores measured endpoints against occupied "
                     "cells; boundary scores against continuous "
-                    "occupied/free boundaries."
+                    "occupied/free boundaries; point_to_line uses "
+                    "nearest-boundary ICP-style normal residuals."
                 ),
             ),
             DeclareLaunchArgument(
@@ -370,6 +377,14 @@ def generate_launch_description():
                 description=(
                     "Reject a LiDAR-map match if its range residual exceeds "
                     "this score threshold."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "localization_max_candidate_mahalanobis_sq",
+                default_value="0.0",
+                description=(
+                    "Optional EKF covariance gate for LiDAR candidates; "
+                    "zero disables the gate."
                 ),
             ),
             DeclareLaunchArgument(
@@ -472,6 +487,14 @@ def generate_launch_description():
                 description=(
                     "Minimum reduction in mean scan residual required before "
                     "applying a candidate correction."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "localization_minimum_score_margin_m",
+                default_value="0.0",
+                description=(
+                    "Optional minimum score gap between the best and second-"
+                    "best LiDAR candidates; zero disables this ambiguity gate."
                 ),
             ),
             DeclareLaunchArgument(
@@ -678,6 +701,9 @@ def generate_launch_description():
                         "max_total_correction_m": localization_max_total_correction_m,
                         "robot_radius_m": localization_robot_radius_m,
                         "max_match_score_m": localization_max_match_score_m,
+                        "max_candidate_mahalanobis_sq": (
+                            localization_max_candidate_mahalanobis_sq
+                        ),
                         "correction_smoothing": localization_correction_smoothing,
                         "minimum_consecutive_matches": localization_minimum_consecutive_matches,
                         "candidate_consistency_m": localization_candidate_consistency_m,
@@ -693,6 +719,7 @@ def generate_launch_description():
                         "yaw_prior_weight": localization_yaw_prior_weight,
                         "max_heading_correction_rad": localization_max_heading_correction_rad,
                         "minimum_score_improvement_m": localization_minimum_score_improvement_m,
+                        "minimum_score_margin_m": localization_minimum_score_margin_m,
                         "publish_rate_hz": localization_publish_rate_hz,
                         "match_rate_hz": localization_match_rate_hz,
                     }
@@ -762,6 +789,8 @@ def generate_launch_description():
                         "goal_x": 2.0,
                         "goal_y": 0.0,
                         "robot_radius_m": planning_radius_m,
+                        "minimum_clearance_m": minimum_clearance,
+                        "safety_margin_m": safety_margin,
                         "odom_topic": navigation_pose_topic,
                     }
                 ],

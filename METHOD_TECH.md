@@ -16,17 +16,21 @@ wheel/IMU estimates against `/odom` without feeding `/odom` into the estimator.
 The map-localization and covariance-aware pose-filter experiments are separate
 diagnostic layers; neither corrected pose is yet a validated control input.
 
-The latest controlled evidence supports this boundary. A calibrated pose EKF
-can produce an estimated position with roughly centimetre-level RMSE, but a
-closed-loop run using `/state_estimate` still finished about `0.069 m` from the
-goal physically while the estimate was within `0.03 m`. The same run spent
-about `30%` of motion time under safety override, and the LiDAR localizer ended
-with `stale_match` rather than applying an external correction. These results
-are model-diagnosis evidence, not a validated replacement for `/odom`.
+The latest controlled evidence supports this boundary. The estimator and
+localizer now expose covariance, NIS, score-margin, Mahalanobis, freshness, and
+applied-correction diagnostics. In a representative localized-navigation run,
+`/localized_estimate` finished `0.0325 m` from the goal while `/state_estimate`
+finished `0.0664 m` and physical `/odom` finished `0.0762 m` away. Only three
+online LiDAR correction events were applied, with a maximum smoothed correction
+of `0.0225 m`; the run timed out without collision and without sustained safety
+recovery. This demonstrates an estimated-goal/physical-goal gap, not a
+validated replacement for `/odom`.
 
 Consequently, parameter changes are treated as controlled experiments rather
-than open-ended tuning. The calibrated EKF configuration is frozen while the
-next work isolates wheel-motion scale error and LiDAR matching latency/gating.
+than open-ended tuning. The calibrated EKF and safety configuration are frozen
+for the current comparison. The next work is a repeatable multi-seed study of
+localization-to-control failure propagation, using the existing audit and
+diagnostic tools before changing the estimator or matcher.
 
 Focused notes are split by topic: [`docs/STATE_ESTIMATION.md`](docs/STATE_ESTIMATION.md)
 for transparent wheel/IMU fusion, [`docs/POSE_EKF.md`](docs/POSE_EKF.md) for
@@ -386,7 +390,8 @@ $$
 
 and is the nearby candidate with the smallest score $J$.
 The node is therefore a transparent local scan matcher, not a complete SLAM
-or covariance-aware localization system. A non-zero
+or a full covariance-aware localization filter. It can optionally use the
+EKF covariance as a post-match plausibility gate. A non-zero
 `localization_yaw_search_radius_rad` can be enabled for diagnosis, but it must
 not be interpreted as an applied heading correction: the localizer publishes
 the fused heading and updates only the translation.
@@ -395,8 +400,28 @@ The production `localization_score_mode:=range` compares measured and
 raycast first-hit ranges. The optional `endpoint` and `boundary` modes test
 two geometric alternatives offline: measured endpoints against occupied cell
 rectangles, and measured endpoints against continuous occupied/free cell
-boundaries. They remain diagnostic because sparse scans and rasterized maps
-can still produce nearly tied x/y candidates.
+boundaries. `point_to_line` is an ICP-style alternative: each endpoint is
+associated with its nearest map boundary segment and scored by the normal
+distance to that segment, with a finite-segment association penalty. It uses
+the same bounded pose search, so it is local registration rather than full
+iterative ICP or SLAM. These alternatives remain diagnostic because sparse
+scans and rasterized maps can still produce nearly tied x/y candidates.
+
+For a measured endpoint $p_i$, let $\ell_{j(i)}$ be the nearest finite map
+boundary segment, let $q_i$ be the closest point on that segment, and let
+$n_{j(i)}$ be its occupied-to-free normal. The point-to-line residual used by
+the implementation is
+
+$$
+e_i^{\mathrm{line}}=
+\left|n_{j(i)}^{\mathsf T}(p_i-q_i)\right|
++\frac{1}{2}\left\|p_i-q_i\right\|_2.
+$$
+
+The first term measures normal alignment; the second discourages an endpoint
+from matching the supporting infinite line outside the finite map segment.
+The pose search still minimizes the same regularized objective $J$ over a
+bounded local grid.
 
 The optimizer is a bounded derivative-free search. `grid` exhaustively
 evaluates the configured circular x/y grid and is the reference behavior.
@@ -409,7 +434,7 @@ score decomposition so an apparently low score is not confused with a unique
 physical match. The selected objective is
 
 $$
-J = e_{mathrm{scan}} +
+J = e_{\mathrm{scan}} +
 w_{mathrm{prior}}\left(\Delta x^2+\Delta y^2\right)+
 w_{\mathrm{yaw}}\Delta\theta^2,
 $$
@@ -440,6 +465,20 @@ retained as a diagnostic innovation; it is not applied to the map-to-odom
 transform. Candidate consistency and repeated-correction checks therefore use
 only the candidate translation; scan-to-scan yaw variation does not block a
 coherent position update.
+The V4 EKF also publishes an x/y covariance with `/state_estimate`. The
+optional `localization_max_candidate_mahalanobis_sq` gate uses that covariance
+after the matcher has selected a candidate. For displacement $\delta p$ and
+map-frame covariance $P_{xy}$, the normalized correction is
+
+$$
+d_M^2 = \delta p^{\mathsf T}P_{xy}^{-1}\delta p.
+$$
+
+The gate is disabled when its launch value is zero. When enabled, a missing or
+singular covariance rejects the candidate, and a value above the configured
+bound receives `candidate_uncertainty_too_large`. This is a plausibility check,
+not an additional optimizer penalty and not a LiDAR measurement update inside
+the EKF.
 Rejected matches leave the previous transform unchanged. The applied correction
 magnitude is published on `/localization_correction_m`. The signed candidate
 displacement is published on `/localization_candidate_dx_m` and
@@ -455,6 +494,12 @@ scan residual relative to the input pose by at least
 `localization_minimum_score_improvement_m`. This prevents a different
 nearby local minimum from being accepted merely because its absolute score is
 below the threshold.
+
+The matcher also reports the gap between the best and second-best candidate.
+The optional `localization_minimum_score_margin_m` gate rejects a result as
+`ambiguous_candidate` when that gap is too small; zero disables the gate. This
+distinguishes a candidate that improves the prior from one that is uniquely
+supported by the local scan geometry.
 
 The matcher is asynchronous, so a numerically good result can still be stale
 when it returns. The node therefore also rejects a result when its age exceeds
@@ -487,17 +532,24 @@ diagnostic `/state_estimate` path remain unchanged by default. Physical success
 must still be checked with `/odom`, because entering the estimated-pose goal
 tolerance alone does not prove that the robot reached the goal.
 
-The current validation keeps `/localized_estimate` experimental. In the safe
-`/odom` baseline, the robot still reaches the goal with approximately `0.049 m`
-physical error. A process-backed `/localized_estimate` run travelled
-approximately `3.16 m` in `65 s`, maintained a stable EKF diagnostic
-(`mean NIS ≈ 0.082`, no wheel-yaw rejections), and had no collision, but timed
-out with approximately `0.805 m` physical final error. This is evidence that
-the asynchronous architecture fixes the observed callback-starvation failure;
-it is not evidence of localization robustness or successful closed-loop
-navigation. Physical success must still be checked with `/odom`, and future
-localization work should improve observability and covariance diagnostics
-before replacing the validated baseline.
+The current validation keeps `/localized_estimate` experimental. The validated
+`/odom` baseline remains the physical reference. The latest process-backed
+localized-navigation run had `3` applied LiDAR correction events and no
+sustained safety recovery, but timed out with `0.0762 m` physical error even
+though the localized estimate was within `0.05 m`. The independent
+`/state_estimate` was still `0.0664 m` from the goal. The path follower
+therefore correctly reported statuses such as `waiting for independent
+estimate` and did not treat the localized pose as proof of physical arrival.
+The result is evidence that the asynchronous localizer and conservative
+confirmation gates are observable; it is not evidence of localization
+robustness or successful closed-loop navigation.
+
+The read-only trace intentionally samples the latest diagnostic state at the
+logger rate. Therefore repeated `accepted` or `repeated_correction` rows in a
+CSV trace are not independent matcher events. `replay_lidar_match.py` is the
+event-level audit, while `diagnose_navigation_trace.py` classifies the closed
+loop outcome. This distinction prevents status persistence from being
+mistaken for additional LiDAR evidence.
 
 This checkpoint is intentionally conservative: a run is counted as physically
 successful only when the ground-truth evaluation pose reaches the goal. A
@@ -724,6 +776,39 @@ current path endpoint, it latches zero velocity across ordinary replans with
 the same endpoint. A materially different endpoint clears the latch. This
 prevents estimator noise or repeated path publication from restarting terminal
 motion, but it does not correct the estimator's physical position error.
+
+When `odom_topic` is `/localized_estimate`, the follower adds an estimator-
+quality condition to this latch. The latest `/localization_match_valid` value
+must be true, and five consecutive *new* `accepted` messages on
+`/localization_match_status` must arrive after the pose enters the goal
+tolerance. The controller counts matcher events, not timer ticks: a latched
+boolean from one old scan cannot be sampled repeatedly and mistaken for five
+independent matches. Any invalid, stale, ambiguous, or repeated LiDAR match
+resets the event streak and publishes a stop command without declaring
+success. This prevents a single scan-map correction from becoming a false
+closed-loop goal event; it does not claim that estimated localization can
+certify physical ground-truth arrival.
+
+The localized-navigation mode adds a second, independent confirmation: the
+wheel/IMU `/state_estimate` must also be within `goal_tolerance` of the goal
+when each fresh accepted event is confirmed. The controller still does not consume
+Gazebo ground truth. This dual-source rule is intentionally conservative: a
+LiDAR match can be internally valid yet correspond to a local map minimum, so
+disagreement between `/localized_estimate` and `/state_estimate` blocks the
+terminal latch and keeps the run diagnostically unsuccessful.
+
+The terminal check also requires the largest planar 1-sigma uncertainty of
+`/state_estimate` to be at most `0.15 m` by default. For the x/y covariance
+matrix `P_xy`, the reported uncertainty is
+
+$$
+\sigma_{xy}=\sqrt{\lambda_{\max}(P_{xy})}.
+$$
+
+This prevents a mean estimate from satisfying the goal distance while its
+uncertainty ellipse is still much larger than the goal tolerance. The bound is
+a configurable safety policy and must be interpreted together with covariance
+calibration; it is not a ground-truth measurement.
 
 This is intentionally a direct-goal baseline, not the default controller anymore. It is useful for comparing direct waypoint tracking against planned-path tracking.
 
@@ -1511,7 +1596,29 @@ The current ROS2 milestone includes:
 - an estimator-summary tool that groups runs by uncertainty configuration;
 - a five-state pose EKF with covariance propagation, NIS gating, and
   measurement-acceptance diagnostics;
+- LiDAR score alternatives (`range`, `endpoint`, `boundary`, and an
+  ICP-style `point_to_line` diagnostic) inside the same bounded local search;
+- local-score observability reports with axis gains, curvature, candidate
+  spread, score margin, and covariance-gate diagnostics;
+- synchronized evaluation traces containing estimator timestamps, executed
+  commands, localization status, and candidate/applied correction fields;
+- planner/safety clearance alignment through one effective planning-clearance
+  model, eliminating the previously observed recovery-turn loop;
 - a Gazebo goal marker that remains visible but is excluded from the LiDAR mask.
+
+The current limitations are equally important:
+
+- `/odom` remains the only validated physical navigation reference;
+- `/state_estimate` has useful covariance and NIS diagnostics but still shows
+  systematic position error under wheel-motion uncertainty;
+- `/localized_estimate` can reduce the reported pose error while remaining
+  wrong enough to place the physical robot outside the goal tolerance;
+- sparse raster-map scans can produce ambiguous nearby minima, and the
+  asynchronous matcher can return stale or repeated candidates;
+- LiDAR corrections are external map-to-odom updates, not LiDAR measurements
+  fused inside the pose EKF;
+- the bounded local matcher is not full ICP, SLAM, loop closure, or globally
+  observable localization.
 
 The next layers are intentionally separated so that each experiment remains
 interpretable:
@@ -1520,9 +1627,10 @@ interpretable:
   LiDAR-map matching;
 - gated, process-backed LiDAR-map correction remains experimental;
 - covariance-aware pose EKF and comparison with the transparent estimator;
-- V5: Monte Carlo validation of localization-to-safety failure propagation;
-- V6: SLAM and Nav2 integration;
-- V7: camera-based safety events and perception/sensor fusion.
+- multi-seed validation of localization-to-control and localization-to-safety
+  failure propagation;
+- only after that, a separate SLAM/Nav2 integration study;
+- later camera-based safety events and perception/sensor fusion.
 
 If the robot stops too early, we can inspect the LiDAR measurement,
 stopping-distance calculation, and command velocity separately instead of

@@ -91,7 +91,7 @@ class LidarMapMatcherTests(unittest.TestCase):
 
     def test_diagnostic_score_modes_return_finite_scores(self) -> None:
         """The optional endpoint models must remain usable on the fixture map."""
-        for score_mode in ("endpoint", "boundary"):
+        for score_mode in ("endpoint", "boundary", "point_to_line"):
             matcher = LidarMapMatcher(
                 search_radius_m=0.30,
                 search_step_m=0.025,

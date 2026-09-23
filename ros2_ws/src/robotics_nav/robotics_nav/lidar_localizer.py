@@ -82,9 +82,11 @@ def mahalanobis_squared_2d(
 ) -> float | None:
     """Return the 2-D covariance-normalized displacement, if invertible.
 
-    This is diagnostic only at present.  The LiDAR matcher does not use this
-    value to rank candidates until the published odometry covariance has been
-    calibrated against representative motion errors.
+    The value is the squared Mahalanobis distance of a candidate correction
+    from the current EKF pose.  It is deliberately evaluated after matching:
+    the covariance is a plausibility gate, not an optimizer term, so the map
+    residual remains the source of the candidate and the EKF uncertainty only
+    decides whether that candidate is compatible with the prior.
     """
     if covariance_xy is None or not all(math.isfinite(value) for value in covariance_xy):
         return None
@@ -225,6 +227,10 @@ class LidarLocalizer(Node):
         self.declare_parameter("max_total_correction_m", 0.20)
         self.declare_parameter("robot_radius_m", 0.35)
         self.declare_parameter("max_match_score_m", 0.12)
+        # Optional covariance-consistency gate for external corrections.  A
+        # value <= 0 disables it, preserving the historical matcher baseline.
+        # Positive values require a valid x/y covariance in the input pose.
+        self.declare_parameter("max_candidate_mahalanobis_sq", 0.0)
         self.declare_parameter("correction_smoothing", 0.25)
         # A non-zero value is diagnostic only: matched yaw is logged but is
         # deliberately not applied to the persistent map->odom correction.
@@ -233,6 +239,10 @@ class LidarLocalizer(Node):
         self.declare_parameter("yaw_prior_weight", 0.02)
         self.declare_parameter("max_heading_correction_rad", 0.25)
         self.declare_parameter("minimum_score_improvement_m", 0.005)
+        # A positive value requires the best candidate to beat the second-best
+        # candidate by a visible residual margin.  Zero preserves the earlier
+        # absolute-improvement-only baseline and is useful for comparison.
+        self.declare_parameter("minimum_score_margin_m", 0.0)
         self.declare_parameter("minimum_consecutive_matches", 3)
         self.declare_parameter("candidate_consistency_m", 0.05)
         self.declare_parameter("minimum_reapplication_change_m", 0.05)
@@ -306,6 +316,10 @@ class LidarLocalizer(Node):
         self.max_match_score_m = max(
             0.0, float(self.get_parameter("max_match_score_m").value)
         )
+        self.max_candidate_mahalanobis_sq = max(
+            0.0,
+            float(self.get_parameter("max_candidate_mahalanobis_sq").value),
+        )
         self.correction_smoothing = min(
             1.0, max(0.0, float(self.get_parameter("correction_smoothing").value))
         )
@@ -351,6 +365,9 @@ class LidarLocalizer(Node):
         )
         self.minimum_score_improvement_m = max(
             0.0, float(self.get_parameter("minimum_score_improvement_m").value)
+        )
+        self.minimum_score_margin_m = max(
+            0.0, float(self.get_parameter("minimum_score_margin_m").value)
         )
         self.matcher = LidarMapMatcher(
             search_radius_m=float(self.get_parameter("search_radius_m").value),
@@ -505,8 +522,10 @@ class LidarLocalizer(Node):
                         "max_total_correction_m": self.max_total_correction_m,
                         "robot_radius_m": self.robot_radius_m,
                         "max_match_score_m": self.max_match_score_m,
+                        "max_candidate_mahalanobis_sq": self.max_candidate_mahalanobis_sq,
                         "max_heading_correction_rad": self.max_heading_correction_rad,
                         "minimum_score_improvement_m": self.minimum_score_improvement_m,
+                        "minimum_score_margin_m": self.minimum_score_margin_m,
                         "minimum_consecutive_matches": self.minimum_consecutive_matches,
                         "candidate_consistency_m": self.candidate_consistency_m,
                         "minimum_reapplication_change_m": self.minimum_reapplication_change_m,
@@ -525,7 +544,9 @@ class LidarLocalizer(Node):
             f"{self.minimum_consecutive_matches}, yaw_search="
             f"{self.matcher.yaw_search_radius_rad:.3f} rad, publish_rate="
             f"{self.publish_rate:.1f} Hz, match_rate={self.match_rate:.1f} Hz, "
-            f"score_mode={self.matcher.score_mode}."
+            f"score_mode={self.matcher.score_mode}, max_mahalanobis_sq="
+            f"{self.max_candidate_mahalanobis_sq:.3f}, min_score_margin="
+            f"{self.minimum_score_margin_m:.4f} m."
         )
 
     def report_status(self, status: str) -> None:
@@ -685,6 +706,21 @@ class LidarLocalizer(Node):
             if math.isfinite(prior_score) and math.isfinite(score)
             else float("-inf")
         )
+        search_diagnostics = result.get("search_diagnostics", {})
+        score_margin = (
+            float(search_diagnostics.get("score_margin_m"))
+            if isinstance(search_diagnostics, dict)
+            and isinstance(search_diagnostics.get("score_margin_m"), (int, float))
+            and math.isfinite(float(search_diagnostics["score_margin_m"]))
+            else None
+        )
+        score_margin_valid = (
+            self.minimum_score_margin_m <= 0.0
+            or (
+                score_margin is not None
+                and score_margin >= self.minimum_score_margin_m
+            )
+        )
         applied_monotonic_s = time.monotonic()
         submitted_monotonic_s = result.get("submitted_monotonic_s")
         match_age_s = (
@@ -755,6 +791,14 @@ class LidarLocalizer(Node):
             (candidate_dx, candidate_dy),
             map_position_covariance_xy,
         )
+        candidate_mahalanobis_valid = (
+            self.max_candidate_mahalanobis_sq <= 0.0
+            or (
+                candidate_mahalanobis_sq is not None
+                and candidate_mahalanobis_sq
+                <= self.max_candidate_mahalanobis_sq
+            )
+        )
         # LiDAR matching may search yaw to improve the scan score, but this
         # node intentionally corrects position only.  Preserve the current
         # fused wheel/IMU heading and publish the matched yaw only as a
@@ -795,10 +839,12 @@ class LidarLocalizer(Node):
             and score <= self.max_match_score_m
             and candidate_correction <= self.max_correction_m
             and total_correction <= self.max_total_correction_m
+            and candidate_mahalanobis_valid
             and abs(candidate_dyaw) <= self.max_heading_correction_rad
             and candidate_is_free
             and candidate_is_new
             and score_improvement >= self.minimum_score_improvement_m
+            and score_margin_valid
             and not stale_match
         )
         # The localizer applies position corrections only.  The matched yaw
@@ -830,10 +876,12 @@ class LidarLocalizer(Node):
             "score_bound": score <= self.max_match_score_m,
             "candidate_correction_bound": candidate_correction <= self.max_correction_m,
             "total_correction_bound": total_correction <= self.max_total_correction_m,
+            "candidate_mahalanobis_bound": candidate_mahalanobis_valid,
             "heading_correction_bound": abs(candidate_dyaw) <= self.max_heading_correction_rad,
             "candidate_is_free": candidate_is_free,
             "candidate_is_new": candidate_is_new,
             "score_improvement": score_improvement >= self.minimum_score_improvement_m,
+            "score_margin_bound": score_margin_valid,
             "match_age_bound": match_age_valid,
             "odom_motion_bound": odom_motion_valid,
             "odom_yaw_change_bound": odom_yaw_change_valid,
@@ -853,16 +901,20 @@ class LidarLocalizer(Node):
             match_status = "correction_too_large"
         elif total_correction > self.max_total_correction_m:
             match_status = "total_correction_too_large"
+        elif not candidate_mahalanobis_valid:
+            match_status = "candidate_uncertainty_too_large"
         elif abs(candidate_dyaw) > self.max_heading_correction_rad:
             match_status = "heading_correction_too_large"
         elif stale_match:
             match_status = "stale_match"
         elif not candidate_is_free:
             match_status = "candidate_in_unsafe_cell"
-        elif not candidate_is_new:
-            match_status = "repeated_correction"
         elif score_improvement < self.minimum_score_improvement_m:
             match_status = "insufficient_score_improvement"
+        elif not score_margin_valid:
+            match_status = "ambiguous_candidate"
+        elif not candidate_is_new:
+            match_status = "repeated_correction"
         elif not consistent:
             match_status = "inconsistent_candidate"
         elif not match_valid:
@@ -929,12 +981,17 @@ class LidarLocalizer(Node):
                     else None
                 ),
                 "candidate_position_mahalanobis_sq": candidate_mahalanobis_sq,
+                "max_candidate_mahalanobis_sq": self.max_candidate_mahalanobis_sq,
+                "candidate_mahalanobis_valid": candidate_mahalanobis_valid,
                 "candidate_dyaw_rad": candidate_dyaw,
                 "candidate_correction_m": candidate_correction,
                 "score_m": score,
                 "prior_score_m": prior_score,
                 "score_improvement_m": score_improvement,
-                "search_diagnostics": result.get("search_diagnostics", {}),
+                "score_margin_m": score_margin,
+                "minimum_score_margin_m": self.minimum_score_margin_m,
+                "score_margin_valid": score_margin_valid,
+                "search_diagnostics": search_diagnostics,
                 "point_count": point_count,
                 "candidate_is_free": candidate_is_free,
                 "candidate_is_new": candidate_is_new,

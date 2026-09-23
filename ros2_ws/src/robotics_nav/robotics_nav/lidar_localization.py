@@ -108,9 +108,15 @@ class LidarMapMatcher:
         self.max_match_distance_m = max(1.0e-3, float(max_match_distance_m))
         self.prior_weight = max(0.0, float(prior_weight))
         self.score_mode = str(score_mode).strip().lower()
-        if self.score_mode not in {"range", "endpoint", "boundary"}:
+        if self.score_mode not in {
+            "range",
+            "endpoint",
+            "boundary",
+            "point_to_line",
+        }:
             raise ValueError(
-                "score_mode must be 'range', 'endpoint', or 'boundary'"
+                "score_mode must be 'range', 'endpoint', 'boundary', "
+                "or 'point_to_line'"
             )
         self.optimizer_mode = str(optimizer_mode).strip().lower()
         if self.optimizer_mode not in {"grid", "coarse_to_fine"}:
@@ -133,6 +139,15 @@ class LidarMapMatcher:
         self.occupied_cells: set[tuple[int, int]] = set()
         self.occupied_boundary_segments: list[
             tuple[float, float, float, float]
+        ] = []
+        # Each feature stores a boundary segment followed by its outward
+        # normal from the occupied cell into the neighbouring free cell:
+        # (x1, y1, x2, y2, nx, ny).  The point-to-line score uses these
+        # normals after associating each scan endpoint with its nearest
+        # segment.  This is ICP-style local registration, not a global SLAM
+        # optimizer: the pose search remains the deterministic bounded grid.
+        self.occupied_boundary_features: list[
+            tuple[float, float, float, float, float, float]
         ] = []
         self.last_match_diagnostics: dict[str, object] = {}
 
@@ -193,6 +208,7 @@ class LidarMapMatcher:
         self.occupied_centres = []
         self.occupied_cells = set()
         self.occupied_boundary_segments = []
+        self.occupied_boundary_features = []
         for row in range(self.height):
             for column in range(self.width):
                 index = row * self.width + column
@@ -225,23 +241,30 @@ class LidarMapMatcher:
                 (
                     (column - 1, row),
                     (minimum_x, minimum_y, minimum_x, maximum_y),
+                    (-1.0, 0.0),
                 ),
                 (
                     (column + 1, row),
                     (maximum_x, minimum_y, maximum_x, maximum_y),
+                    (1.0, 0.0),
                 ),
                 (
                     (column, row - 1),
                     (minimum_x, minimum_y, maximum_x, minimum_y),
+                    (0.0, -1.0),
                 ),
                 (
                     (column, row + 1),
                     (minimum_x, maximum_y, maximum_x, maximum_y),
+                    (0.0, 1.0),
                 ),
             )
-            for neighbour, segment in neighbours:
+            for neighbour, segment, normal in neighbours:
                 if neighbour not in self.occupied_cells:
                     self.occupied_boundary_segments.append(segment)
+                    self.occupied_boundary_features.append(
+                        (*segment, *normal)
+                    )
 
     def _scan_measurements(
         self,
@@ -508,6 +531,105 @@ class LidarMapMatcher:
                 return float("inf")
         return total / total_measurements
 
+    def _point_to_line_error(
+        self,
+        x: float,
+        y: float,
+        yaw: float,
+        measurements: Iterable[tuple[float, float | None]],
+        *,
+        range_max: float,
+        score_upper_bound: float | None = None,
+    ) -> float:
+        """Score scan endpoints with nearest-map-feature point-to-line residuals.
+
+        This is an ICP-style correspondence model specialized to a known
+        occupancy map.  Each valid endpoint is associated with the closest
+        occupied/free boundary segment.  The residual is the absolute normal
+        distance to that segment's supporting line, plus a small penalty when
+        the perpendicular projection falls outside the finite segment.  The
+        latter prevents a point from matching an unrelated infinite wall.
+
+        The outer pose search is still the existing bounded deterministic
+        grid, so this mode is a local registration experiment rather than a
+        full iterative ICP or SLAM implementation.
+        """
+        measurement_list = list(measurements)
+        total_measurements = len(measurement_list)
+        if total_measurements == 0 or not self.occupied_boundary_features:
+            return float("inf")
+
+        total = 0.0
+        for scan_angle, measured_range in measurement_list:
+            if measured_range is None:
+                predicted_range = self._raycast_range(
+                    x,
+                    y,
+                    float(yaw) + scan_angle,
+                    range_max=range_max,
+                )
+                residual = (
+                    self.max_match_distance_m
+                    if predicted_range is not None
+                    else 0.0
+                )
+            else:
+                world_angle = float(yaw) + scan_angle
+                endpoint_x = x + measured_range * math.cos(world_angle)
+                endpoint_y = y + measured_range * math.sin(world_angle)
+                best_segment_distance = float("inf")
+                best_feature: tuple[float, float, float, float, float, float] | None = None
+                for feature in self.occupied_boundary_features:
+                    segment_distance = self._point_to_segment_distance(
+                        endpoint_x,
+                        endpoint_y,
+                        *feature[:4],
+                    )
+                    if segment_distance < best_segment_distance:
+                        best_segment_distance = segment_distance
+                        best_feature = feature
+
+                if best_feature is None or not math.isfinite(best_segment_distance):
+                    residual = self.max_match_distance_m
+                else:
+                    start_x, start_y, end_x, end_y, normal_x, normal_y = (
+                        best_feature
+                    )
+                    segment_x = end_x - start_x
+                    segment_y = end_y - start_y
+                    length_squared = segment_x * segment_x + segment_y * segment_y
+                    if length_squared <= 0.0:
+                        projection = 0.0
+                    else:
+                        projection = (
+                            (endpoint_x - start_x) * segment_x
+                            + (endpoint_y - start_y) * segment_y
+                        ) / length_squared
+                    projection = min(1.0, max(0.0, projection))
+                    projected_x = start_x + projection * segment_x
+                    projected_y = start_y + projection * segment_y
+                    normal_residual = abs(
+                        (endpoint_x - projected_x) * normal_x
+                        + (endpoint_y - projected_y) * normal_y
+                    )
+                    tangent_residual = math.hypot(
+                        endpoint_x - projected_x,
+                        endpoint_y - projected_y,
+                    )
+                    residual = min(
+                        normal_residual + 0.5 * tangent_residual,
+                        self.max_match_distance_m,
+                    )
+
+            total += residual
+            if (
+                score_upper_bound is not None
+                and math.isfinite(score_upper_bound)
+                and total > score_upper_bound * total_measurements
+            ):
+                return float("inf")
+        return total / total_measurements
+
     def _measurement_error(
         self,
         x: float,
@@ -530,6 +652,15 @@ class LidarMapMatcher:
             )
         if self.score_mode == "boundary":
             return self._boundary_error(
+                x,
+                y,
+                yaw,
+                measurements,
+                range_max=range_max,
+                score_upper_bound=score_upper_bound,
+            )
+        if self.score_mode == "point_to_line":
+            return self._point_to_line_error(
                 x,
                 y,
                 yaw,

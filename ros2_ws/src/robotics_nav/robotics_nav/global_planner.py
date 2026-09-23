@@ -35,12 +35,28 @@ class GlobalPlanner(Node):
         # caster. The base diagonal is about 0.31 m, so 0.35 m leaves margin
         # for grid discretization and tracking error.
         self.declare_parameter("robot_radius_m", 0.35)
+        # The planner and the safety supervisor must share one geometric
+        # envelope.  The robot radius describes the physical footprint; the
+        # safety margin adds tracking/perception clearance, while minimum
+        # clearance is the independent lower bound enforced by LiDAR safety.
+        self.declare_parameter("minimum_clearance_m", 0.50)
+        self.declare_parameter("safety_margin_m", 0.15)
         self.declare_parameter("occupied_threshold", 50)
         self.declare_parameter("odom_topic", "/odom")
 
         self.goal_x = float(self.get_parameter("goal_x").value)
         self.goal_y = float(self.get_parameter("goal_y").value)
         self.robot_radius_m = float(self.get_parameter("robot_radius_m").value)
+        self.minimum_clearance_m = float(
+            self.get_parameter("minimum_clearance_m").value
+        )
+        self.safety_margin_m = float(
+            self.get_parameter("safety_margin_m").value
+        )
+        self.effective_planning_radius_m = max(
+            self.robot_radius_m + self.safety_margin_m,
+            self.minimum_clearance_m,
+        )
         self.occupied_threshold = int(self.get_parameter("occupied_threshold").value)
         odom_topic = str(self.get_parameter("odom_topic").value)
 
@@ -73,6 +89,14 @@ class GlobalPlanner(Node):
         self.latest_map: Optional[OccupancyGrid] = None
         self.latest_odom: Optional[Odometry] = None
         self.last_reported_signature: Optional[tuple[Cell, Cell]] = None
+
+        self.get_logger().info(
+            "Planning clearance: "
+            f"robot_radius={self.robot_radius_m:.3f} m, "
+            f"safety_margin={self.safety_margin_m:.3f} m, "
+            f"minimum_clearance={self.minimum_clearance_m:.3f} m, "
+            f"effective_radius={self.effective_planning_radius_m:.3f} m."
+        )
 
     def map_callback(self, message: OccupancyGrid) -> None:
         self.latest_map = message
@@ -167,7 +191,9 @@ class GlobalPlanner(Node):
         the body-clearance requirement into a point-planning problem and
         deliberately errs on the conservative side at grid boundaries.
         """
-        radius_cells = math.ceil(self.robot_radius_m / grid.info.resolution)
+        radius_cells = math.ceil(
+            self.effective_planning_radius_m / grid.info.resolution
+        )
         occupied: set[Cell] = set()
 
         for row in range(grid.info.height):

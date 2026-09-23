@@ -148,22 +148,21 @@ provides the standard `map → odom → base_link` transform.
 
 ### Latest estimation evidence
 
-The current calibrated pose-EKF configuration uses a fixed pre-calibrated gyro
-bias, propagated wheel speed, explicit slip uncertainty, wheel-yaw bias, a
-wheel-yaw NIS gate, and covariance logging. In the latest closed-loop trial,
-the estimated pose reached the `0.03 m` tolerance, but the physical pose
-finished `0.069 m` from the goal. The EKF diagnostic reported approximately
-`0.028 m` position RMSE, while the motion audit found a `2.2%` model-to-truth
-forward-distance mismatch. The run also spent `30.1%` of motion time under
-safety override, so this is not yet a validated estimated-pose navigation
-result.
+The current calibrated pose-EKF configuration uses propagated wheel speed,
+explicit slip uncertainty, wheel-yaw bias, a wheel-yaw NIS gate, and covariance
+logging. The latest localized-navigation trial finished with physical `/odom`
+error `0.0762 m`, independent `/state_estimate` error `0.0664 m`, and
+`/localized_estimate` error `0.0325 m`. Three LiDAR corrections were applied,
+with a maximum smoothed correction of `0.0225 m`; the run timed out without
+collision or sustained safety recovery.
 
 The result is interpreted as a model and integration diagnostic, not as a
-reason to keep tuning isolated weights. The current evidence points to two
-structural issues: systematic wheel-motion scale/slip error and LiDAR-map
-corrections being rejected as `stale_match`. The next experiments therefore
-freeze the calibrated EKF parameters and diagnose timing and acceptance gates
-offline before changing the navigation source.
+reason to keep tuning isolated weights. It shows a real estimated-goal versus
+physical-goal gap: the localizer improved the reported pose but did not yet
+provide a trustworthy closed-loop navigation source. The calibrated EKF,
+planner, and safety configuration are therefore frozen for the next multi-seed
+failure-propagation study. Existing replay, trace-diagnosis, observability,
+and score-consistency tools are used before any further algorithm change.
 
 ### State-estimation and localization status
 
@@ -174,10 +173,11 @@ physical `/odom` pose remained outside the goal tolerance. Evaluation therefore
 reports estimated-pose completion and physical completion separately; overall
 success requires the physical check.
 
-The LiDAR localizer remains diagnostic-only. No-slip and denser-scan trials
-produced inconsistent candidate corrections. The covariance-aware pose EKF is
-also diagnostic-only until its physical error, covariance growth, NIS values,
-and measurement rejection behavior are validated under controlled uncertainty.
+The LiDAR localizer remains diagnostic-only. Its score alternatives and
+covariance/freshness gates help explain ambiguous or stale candidates, but they
+do not turn the bounded local matcher into SLAM. The covariance-aware pose EKF
+is also diagnostic-only until its physical error, covariance calibration, NIS
+values, and measurement rejection behavior are validated across fixed seeds.
 
 ## Quick start
 

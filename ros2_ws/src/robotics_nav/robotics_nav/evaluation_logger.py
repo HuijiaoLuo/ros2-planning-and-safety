@@ -117,6 +117,10 @@ class EvaluationLogger(Node):
         self.configured_planning_radius = float(
             self.get_parameter("planning_radius_m").value
         )
+        self.configured_effective_planning_radius = max(
+            self.configured_planning_radius + self.configured_safety_margin,
+            self.configured_minimum_clearance,
+        )
         self.configured_experiment_timeout = float(
             self.get_parameter("experiment_timeout_s").value
         )
@@ -165,6 +169,7 @@ class EvaluationLogger(Node):
         self.latest_map: Optional[OccupancyGrid] = None
         self.latest_scan: Optional[LaserScan] = None
         self.latest_raw_command: Optional[Twist] = None
+        self.latest_safe_command: Optional[Twist] = None
         self.latest_override_state: Optional[bool] = None
         self.collision_state: Optional[bool] = None
         self.latest_localization_candidate_correction_m: Optional[float] = None
@@ -239,6 +244,12 @@ class EvaluationLogger(Node):
             Twist,
             "/cmd_vel_raw",
             self.raw_command_callback,
+            10,
+        )
+        self.create_subscription(
+            Twist,
+            "/cmd_vel",
+            self.safe_command_callback,
             10,
         )
         self.create_subscription(
@@ -371,6 +382,16 @@ class EvaluationLogger(Node):
     def raw_command_callback(self, message: Twist) -> None:
         self.latest_raw_command = message
 
+    def safe_command_callback(self, message: Twist) -> None:
+        """Record the command after the LiDAR safety layer has gated it.
+
+        ``/cmd_vel_raw`` is the path follower's request.  ``/cmd_vel`` is the
+        command that reaches the simulator after the safety supervisor may
+        stop forward motion or inject a recovery turn.  Keeping both makes a
+        recovery spin distinguishable from a path-follower heading command.
+        """
+        self.latest_safe_command = message
+
     def override_state_callback(self, message: Bool) -> None:
         self.latest_override_state = bool(message.data)
 
@@ -409,6 +430,18 @@ class EvaluationLogger(Node):
         sin_yaw = 2.0 * (orientation.w * orientation.z + orientation.x * orientation.y)
         cos_yaw = 1.0 - 2.0 * (orientation.y * orientation.y + orientation.z * orientation.z)
         return math.atan2(sin_yaw, cos_yaw)
+
+    @staticmethod
+    def stamp_seconds(message: Odometry) -> float:
+        """Return an Odometry header stamp in seconds for synchronization checks.
+
+        The evaluation logger receives the truth, navigation, and estimator
+        topics independently.  Recording their message timestamps makes it
+        possible to distinguish a real pose error from a final-cache timing
+        mismatch when a run is stopped by a timeout or SIGINT.
+        """
+        stamp = message.header.stamp
+        return float(stamp.sec) + 1.0e-9 * float(stamp.nanosec)
 
     def front_clearance(self, scan: LaserScan) -> Optional[float]:
         """Return the closest valid LiDAR range inside the front sector.
@@ -576,11 +609,44 @@ class EvaluationLogger(Node):
         raw_angular_z = (
             None if self.latest_raw_command is None else self.latest_raw_command.angular.z
         )
+        safe_linear_x = (
+            None
+            if self.latest_safe_command is None
+            else self.latest_safe_command.linear.x
+        )
+        safe_angular_z = (
+            None
+            if self.latest_safe_command is None
+            else self.latest_safe_command.angular.z
+        )
         self.trace_rows.append(
             {
                 "time_s": now - self.started_at,
                 "x_m": current_x,
                 "y_m": current_y,
+                "odom_timestamp_s": self.stamp_seconds(self.latest_odom),
+                "navigation_timestamp_s": (
+                    None
+                    if navigation_pose is None
+                    else self.stamp_seconds(navigation_pose)
+                ),
+                "state_estimate_timestamp_s": (
+                    None
+                    if self.latest_state_estimate is None
+                    else self.stamp_seconds(self.latest_state_estimate)
+                ),
+                "navigation_timestamp_offset_s": (
+                    None
+                    if navigation_pose is None
+                    else self.stamp_seconds(navigation_pose)
+                    - self.stamp_seconds(self.latest_odom)
+                ),
+                "state_estimate_timestamp_offset_s": (
+                    None
+                    if self.latest_state_estimate is None
+                    else self.stamp_seconds(self.latest_state_estimate)
+                    - self.stamp_seconds(self.latest_odom)
+                ),
                 "navigation_x_m": (
                     None if navigation_position is None else navigation_position.x
                 ),
@@ -607,6 +673,8 @@ class EvaluationLogger(Node):
                 "goal_y_m": self.goal_y,
                 "raw_linear_x_mps": raw_linear_x,
                 "raw_angular_z_radps": raw_angular_z,
+                "executed_linear_x_mps": safe_linear_x,
+                "executed_angular_z_radps": safe_angular_z,
                 "front_clearance_m": clearance,
                 "safety_override": self.latest_override_state,
                 "collision": self.collision_state,
@@ -636,8 +704,18 @@ class EvaluationLogger(Node):
     def result(self) -> dict[str, object]:
         """Return one CSV-ready row with physical and navigation-pose metrics."""
         now = time.monotonic()
+
+        # Use the last complete evaluation sample as the final snapshot.  The
+        # timeout callback can shut down the executor before a final pose
+        # callback is delivered; reading the live caches here would then mix
+        # messages from different logical times and can disagree with the
+        # time-series logger.  The live-cache calculation below remains as a
+        # fallback for runs that ended before the first sample.
+        final_sample = self.trace_rows[-1] if self.trace_rows else None
         final_error: Optional[float] = None
-        if (
+        if final_sample is not None:
+            final_error = final_sample.get("ground_truth_goal_error_m")
+        elif (
             self.latest_odom is not None
             and self.goal_x is not None
             and self.goal_y is not None
@@ -656,7 +734,9 @@ class EvaluationLogger(Node):
             if self.navigation_pose_topic == "/odom"
             else self.latest_navigation_pose
         )
-        if (
+        if final_sample is not None:
+            navigation_final_error = final_sample.get("navigation_goal_error_m")
+        elif (
             navigation_pose is not None
             and self.goal_x is not None
             and self.goal_y is not None
@@ -670,7 +750,11 @@ class EvaluationLogger(Node):
             )
 
         state_estimate_final_error: Optional[float] = None
-        if (
+        if final_sample is not None:
+            state_estimate_final_error = final_sample.get(
+                "state_estimate_goal_error_m"
+            )
+        elif (
             self.latest_state_estimate is not None
             and self.goal_x is not None
             and self.goal_y is not None
@@ -732,6 +816,49 @@ class EvaluationLogger(Node):
                 self.state_estimate_goal_reached_at is not None
             ),
             "state_estimate_final_error_m": state_estimate_final_error,
+            "final_executed_linear_x_mps": (
+                None
+                if final_sample is None
+                else final_sample.get("executed_linear_x_mps")
+            ),
+            "final_executed_angular_z_radps": (
+                None
+                if final_sample is None
+                else final_sample.get("executed_angular_z_radps")
+            ),
+            "evaluation_final_sample_time_s": (
+                None if final_sample is None else final_sample.get("time_s")
+            ),
+            "evaluation_final_odom_timestamp_s": (
+                None
+                if final_sample is None
+                else final_sample.get("odom_timestamp_s")
+            ),
+            "evaluation_final_navigation_timestamp_s": (
+                None
+                if final_sample is None
+                else final_sample.get("navigation_timestamp_s")
+            ),
+            "evaluation_final_state_estimate_timestamp_s": (
+                None
+                if final_sample is None
+                else final_sample.get("state_estimate_timestamp_s")
+            ),
+            "evaluation_final_navigation_timestamp_offset_s": (
+                None
+                if final_sample is None
+                else final_sample.get("navigation_timestamp_offset_s")
+            ),
+            "evaluation_final_state_estimate_timestamp_offset_s": (
+                None
+                if final_sample is None
+                else final_sample.get("state_estimate_timestamp_offset_s")
+            ),
+            "evaluation_final_errors_source": (
+                "last_complete_trace_sample"
+                if final_sample is not None
+                else "live_cache_fallback"
+            ),
             "navigation_pose_goal_error_gap_m": navigation_goal_error_gap,
             "navigation_pose_reached_before_ground_truth": (
                 navigation_reached_before_ground_truth
@@ -770,6 +897,9 @@ class EvaluationLogger(Node):
             "configured_scan_noise_seed": self.configured_scan_noise_seed,
             "configured_safety_margin_m": self.configured_safety_margin,
             "configured_planning_radius_m": self.configured_planning_radius,
+            "configured_effective_planning_clearance_m": (
+                self.configured_effective_planning_radius
+            ),
             "configured_experiment_timeout_s": self.configured_experiment_timeout,
             "termination_reason": self.termination_reason or "external_interrupt",
             "minimum_clearance_m": (
@@ -837,6 +967,11 @@ class EvaluationLogger(Node):
                 "time_s",
                 "x_m",
                 "y_m",
+                "odom_timestamp_s",
+                "navigation_timestamp_s",
+                "state_estimate_timestamp_s",
+                "navigation_timestamp_offset_s",
+                "state_estimate_timestamp_offset_s",
                 "navigation_x_m",
                 "navigation_y_m",
                 "state_estimate_x_m",
@@ -849,6 +984,8 @@ class EvaluationLogger(Node):
                 "goal_y_m",
                 "raw_linear_x_mps",
                 "raw_angular_z_radps",
+                "executed_linear_x_mps",
+                "executed_angular_z_radps",
                 "front_clearance_m",
                 "safety_override",
                 "collision",
