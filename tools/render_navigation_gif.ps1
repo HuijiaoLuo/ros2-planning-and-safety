@@ -7,6 +7,8 @@ param(
     [string]$MapPath,
     [Parameter(Mandatory = $true)]
     [string]$Output,
+    [string]$Title = "Differential-drive A* navigation",
+    [double]$MapContextM = 1.2,
     [int]$MaxFrames = 180,
     [int]$Fps = 12
 )
@@ -76,7 +78,8 @@ function Draw-Frame {
         [int]$Width,
         [int]$Height,
         [int]$Padding,
-        [int]$Fps
+        [int]$Fps,
+        [string]$Title
     )
     $bitmap = [Drawing.Bitmap]::new($Width, $Height)
     $graphics = [Drawing.Graphics]::FromImage($bitmap)
@@ -154,7 +157,7 @@ function Draw-Frame {
     )
     $graphics.DrawLine($headingPen, $robot, $headingEnd)
 
-    $graphics.DrawString("Validated wheel/IMU navigation", $titleFont, $textBrush, 18, 12)
+    $graphics.DrawString($Title, $titleFont, $textBrush, 18, 12)
     $clearance = Get-OptionalNumber $current.front_clearance_m
     $clearanceText = if ($null -eq $clearance) { "n/a" } else { "{0:F3} m" -f $clearance }
     $status = "t = {0,6:F1} s`nfront clearance = {1}`nsafety override = {2}" -f (Get-Number $current.time_s), $clearanceText, $current.safety_override
@@ -193,12 +196,38 @@ $goalY = Get-OptionalNumber $traceRows[$traceRows.Count - 1].goal_y_m
 if ($null -eq $goalX) { $goalX = $planX[$planX.Count - 1] }
 if ($null -eq $goalY) { $goalY = $planY[$planY.Count - 1] }
 
-$allX = @($traceX + $planX + $goalX)
-$allY = @($traceY + $planY + $goalY)
-$xMin = ([double]($allX | Measure-Object -Minimum).Minimum) - 0.45
-$xMax = ([double]($allX | Measure-Object -Maximum).Maximum) + 0.45
-$yMin = ([double]($allY | Measure-Object -Minimum).Minimum) - 0.75
-$yMax = ([double]($allY | Measure-Object -Maximum).Maximum) + 0.75
+$baseAllX = @($traceX + $planX + $goalX)
+$baseAllY = @($traceY + $planY + $goalY)
+$baseXMin = ([double]($baseAllX | Measure-Object -Minimum).Minimum) - 0.45
+$baseXMax = ([double]($baseAllX | Measure-Object -Maximum).Maximum) + 0.45
+$baseYMin = ([double]($baseAllY | Measure-Object -Minimum).Minimum) - 0.75
+$baseYMax = ([double]($baseAllY | Measure-Object -Maximum).Maximum) + 0.75
+$resolution = if ($mapRows.Count -gt 0) { Get-Number $mapRows[0].resolution_m } else { 0.1 }
+$contextXMin = ([double]($baseAllX | Measure-Object -Minimum).Minimum) - $MapContextM
+$contextXMax = ([double]($baseAllX | Measure-Object -Maximum).Maximum) + $MapContextM
+$contextYMin = ([double]($baseAllY | Measure-Object -Minimum).Minimum) - $MapContextM
+$contextYMax = ([double]($baseAllY | Measure-Object -Maximum).Maximum) + $MapContextM
+$visibleMapRows = @($mapRows | Where-Object {
+    $mapX = Get-Number $_.x_m
+    $mapY = Get-Number $_.y_m
+    $mapX -ge $contextXMin -and $mapX -le $contextXMax -and
+        $mapY -ge $contextYMin -and $mapY -le $contextYMax
+})
+if ($visibleMapRows.Count -gt 0) {
+    $mapMinX = ([double]($visibleMapRows | ForEach-Object { (Get-Number $_.x_m) - 0.5 * $resolution } | Measure-Object -Minimum).Minimum) - 0.15
+    $mapMaxX = ([double]($visibleMapRows | ForEach-Object { (Get-Number $_.x_m) + 0.5 * $resolution } | Measure-Object -Maximum).Maximum) + 0.15
+    $mapMinY = ([double]($visibleMapRows | ForEach-Object { (Get-Number $_.y_m) - 0.5 * $resolution } | Measure-Object -Minimum).Minimum) - 0.15
+    $mapMaxY = ([double]($visibleMapRows | ForEach-Object { (Get-Number $_.y_m) + 0.5 * $resolution } | Measure-Object -Maximum).Maximum) + 0.15
+    $xMin = [Math]::Min($baseXMin, $mapMinX)
+    $xMax = [Math]::Max($baseXMax, $mapMaxX)
+    $yMin = [Math]::Min($baseYMin, $mapMinY)
+    $yMax = [Math]::Max($baseYMax, $mapMaxY)
+} else {
+    $xMin = $baseXMin
+    $xMax = $baseXMax
+    $yMin = $baseYMin
+    $yMax = $baseYMax
+}
 $width = 960
 $height = 600
 $padding = 58
@@ -222,7 +251,7 @@ $flushParams.Param[0] = [Drawing.Imaging.EncoderParameter]::new($saveFlag, [long
 $first = $null
 try {
     for ($frameNumber = 0; $frameNumber -lt $indices.Count; $frameNumber++) {
-        $bitmap = Draw-Frame $indices[$frameNumber] $traceRows $planRows $mapRows $xMin $xMax $yMin $yMax $goalX $goalY $width $height $padding $Fps
+        $bitmap = Draw-Frame $indices[$frameNumber] $traceRows $planRows $visibleMapRows $xMin $xMax $yMin $yMax $goalX $goalY $width $height $padding $Fps $Title
         if ($frameNumber -eq 0) {
             $first = $bitmap
             $first.Save($outputPath, $gifCodec, $encoderParams)

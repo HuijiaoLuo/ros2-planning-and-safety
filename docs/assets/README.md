@@ -1,13 +1,14 @@
 # Visual assets
 
 These visuals are generated from recorded ROS 2 traces with the single
-canonical renderer [`tools/render_baseline_gif.py`](../../tools/render_baseline_gif.py).
-Run [`tools/render_navigation_comparison.sh`](../../tools/render_navigation_comparison.sh)
-to regenerate all four homepage comparison GIFs with identical map geometry,
-axis limits, labels, and legend styling. The PowerShell
-[`tools/render_navigation_gif.ps1`](../../tools/render_navigation_gif.ps1) is a
-dependency-free fallback for individual previews, not the canonical homepage
-comparison renderer.
+canonical comparison command:
+[`tools/render_navigation_comparison.sh`](../../tools/render_navigation_comparison.sh).
+It regenerates all four homepage GIFs with identical map geometry, axis
+limits, labels, and legend styling. The command uses
+[`tools/render_baseline_gif.py`](../../tools/render_baseline_gif.py) when the
+active Python has Matplotlib and Pillow; otherwise it automatically uses the
+dependency-free PowerShell renderer
+[`tools/render_navigation_gif.ps1`](../../tools/render_navigation_gif.ps1).
 
 Each navigation GIF uses the same visual language:
 
