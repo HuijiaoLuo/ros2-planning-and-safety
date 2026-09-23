@@ -2,242 +2,84 @@
 
 [![CI](https://github.com/HuijiaoLuo/ros2-planning-and-safety/actions/workflows/ci.yml/badge.svg)](https://github.com/HuijiaoLuo/ros2-planning-and-safety/actions/workflows/ci.yml)
 
-A robotics portfolio project that connects classical path planning with a
-simulated differential-drive robot.
+A robotics portfolio project that turns maps and sensor measurements into safe
+motion commands for a simulated differential-drive robot.
 
-The central question is:
-
-> How should a robot turn map and sensor measurements into safe motion commands?
-
-At the system level, this is a ROS 2 robotics validation framework spanning
-classical navigation, closed-loop control, LiDAR safety, wheel/IMU EKF state
-estimation, uncertainty calibration, and failure diagnostics.
+The repository connects classical grid planning, closed-loop control, LiDAR
+safety supervision, wheel/IMU state estimation, and localization diagnostics in
+one ROS 2 + Gazebo validation workflow.
 
 <p align="center">
   <img src="docs/assets/baseline_navigation.gif" alt="Baseline A* navigation with a differential-drive robot" width="820">
 </p>
 
-<p align="center"><em>Baseline run: A* path planning, closed-loop path following, and LiDAR-aware safety supervision.</em></p>
+<p align="center"><em>A* planning, path following, and LiDAR-aware safety supervision.</em></p>
 
-<p align="center"><sub>Gray: occupied cells · dashed blue: A* path · red: executed trajectory · cyan: robot · orange: goal. The overlay reports time, front clearance, and safety override state.</sub></p>
+## Status at a glance
 
-### How to read the demo
+| Area | Status |
+| --- | --- |
+| Grid planning | Python and C++ implementations of DFS, BFS, Dijkstra, Greedy Best-First, and A* |
+| ROS 2 baseline | A* path planning, path following, LiDAR safety, and Gazebo simulation are complete |
+| Safety validation | Baseline and seeded noise/latency experiments are recorded in `results/` |
+| State estimation | Wheel/IMU fusion and covariance-aware EKF are available for diagnostics |
+| Localization | Deterministic matching, MCL, and ICP are experimental known-map backends |
+| Validation boundary | `/odom` remains the only validated physical navigation reference |
 
-`front clearance` is the closest valid LiDAR return within `±60°` of the
-robot's forward direction. It is measured from the LiDAR origin to the first
-obstacle surface, not from the robot's outer body. In this simulation the
-LiDAR is centered in a `0.50 m`-long base, so for a flat wall directly ahead:
-
-```text
-approximate body-to-wall gap = displayed front clearance - 0.25 m
-```
-
-The safety supervisor compares this sensor measurement with the configured
-clearance threshold and the speed-dependent stopping envelope. See
-[`METHOD_TECH.md`](METHOD_TECH.md) for the complete measurement model.
-
-## Current status
-
-The reproducible planning and safety baseline is frozen. The repository also
-contains explicitly separated state-estimation
-and map-localization workstreams; these are not silently presented as validated
-navigation replacements.
-
-The current implementation includes:
-
-- Python and C++ implementations of DFS, BFS, Dijkstra, Greedy Best-First, and A*;
-- path, runtime, and expanded-node benchmarks;
-- a ROS2 Jazzy + Gazebo differential-drive simulation;
-- occupancy-grid A* planning and `nav_msgs/Path` publishing;
-- path following through `/cmd_vel_raw`;
-- LiDAR-based safety supervision through `/cmd_vel`;
-- physics-informed stopping distance, clearance hysteresis, and recovery turning;
-- Python unit tests, C++ tests, and GitHub Actions CI.
-- an offline planner-scaling benchmark for map-size, density, and heuristic sweeps;
-- a read-only ROS2 evaluation logger for closed-loop metrics;
-- a shared launch-configurable goal tolerance and latched terminal stop in the
-  path follower;
-- a heading-estimation diagnostic using `/wheel_odom` and `/imu` while
-  navigation remains on the validated `/odom` baseline;
-- an evaluation-only estimator logger reporting wheel and fused-pose RMSE;
-- seeded gyro bias/noise, wheel-slip, adaptive fusion, and propagated-position
-  experiments with configuration values recorded in CSV output;
-- a gated LiDAR-to-static-map localizer with persistent `map → odom` state and
-  diagnostic match-status topics;
-- a wheel/IMU-only `/state_prediction` stream kept separate from externally
-  corrected `/state_estimate` output;
-- a known-map Monte Carlo localization backend with particle covariance,
-  ambiguity, latency, and accepted-candidate diagnostics;
-- an independent point-to-point Iterative Closest Point (ICP) map-registration
-  baseline with auditable correspondence, residual, convergence, and
-  worker-latency diagnostics;
-- a covariance-aware pose EKF with x/y/yaw covariance, NIS gating, and
-  wheel-measurement acceptance diagnostics;
-
-The robot has been tested in simulation from the start position to the goal at
-approximately `(2.0, 0.0)`, with a final position error within the configured
-`0.05 m` tolerance.
-
-### Robustness snapshot
-
-The evaluation suite measures goal completion, time-to-goal, physical LiDAR
-clearance, safety-layer intervention, and collision status. The summary below
-shows the main planning-radius boundary on the current map:
-
-| Configuration | Success | Mean time-to-goal (successful runs) | Mean measured clearance | Safety override ratio |
-| --- | :---: | ---: | ---: | ---: |
-| Baseline: radius `0.35 m`, no noise | 1/1 | 65.04 s | 0.521 m | 0.000 |
-| Noise `0.03 m`, radius `0.40 m` | 1/3 | 462.93 s (n=1) | 0.525 m | 0.683 |
-| Noise `0.03 m`, radius `0.41 m` | 3/3 | 71.00 s | 0.632 m | 0.000 |
-| Noise `0.05 m`, radius `0.40 m` | 0/3 | -- | 0.573 m | 0.764 |
-| Noise `0.05 m`, radius `0.41 m` | 3/3 | 70.49 s | 0.632 m | 0.002 |
-| Delay `0.30 s` + noise `0.05 m`, radius `0.41 m` | 3/3 | 69.38 s | 0.631 m | 0.008 |
-
-The `0.40 m` configuration is a marginal boundary case: its single
-successful run took much longer and required sustained safety intervention.
-The time-to-goal value above is therefore calculated from one successful
-seed, not averaged over all three trials. Under the tested seeds and
-uncertainty settings, `planning_radius=0.40 m` exhibited boundary behavior,
-while `0.41 m` was the smallest tested radius that achieved consistent
-success. This is an empirical result, not a statistical robustness guarantee.
-All listed runs were collision-free.
-
-![Robustness summary](docs/assets/robustness_summary.png)
-
-The evaluation logger records `termination_reason` (`goal_reached`,
-`goal_confirmation_failed`, `experiment_timeout`, or `manual_interrupt`) and
-supports an explicit `experiment_timeout_s` launch parameter. The top-level
-`success` field now means terminal physical completion: the path follower
-published `goal_reached_latched`, the logger ended with `goal_reached`, and
-the final complete `/odom` sample remained within the goal tolerance.
-Historical tolerance crossings are reported separately as
-`ground_truth_goal_reached_any_time`, while
-`ground_truth_final_within_goal_tolerance` describes the final complete sample.
-This prevents a run that briefly entered the tolerance and later timed out
-from being counted as a successful completion. A controller latch without
-final physical agreement is reported separately.
+The planning and safety baseline is frozen. State estimation and map
+localization are intentionally kept separate from the validated navigation
+path until their physical accuracy and timing behavior are established.
 
 ## System architecture
 
 ```text
 /map
-  ↓
-global_planner (A*)
-  ↓ /plan
-path_follower
-  ↓ /cmd_vel_raw
-safety_supervisor ← /scan, /odom
-  ↓ /cmd_vel
-Gazebo differential-drive robot
+  |
+  v
+global_planner (A*) --> /plan --> path_follower --> /cmd_vel_raw
+                                                   |
+/scan + /odom --> safety_supervisor --> /cmd_vel --> Gazebo robot
 ```
 
-The green goal marker is visible in Gazebo but excluded from the LiDAR
-visibility mask, so it is not treated as a physical obstacle.
-
-The baseline uses `/odom` for navigation. The state-estimation workstream
-additionally provides two distinct outputs:
+The baseline uses `/odom` for navigation. The estimation and localization
+workstreams expose separate diagnostic streams:
 
 ```text
-/wheel_odom + /imu → heading_estimator → /state_prediction
-                                      └→ /state_estimate
+/wheel_odom + /imu --> /state_prediction --> controller experiments
+                                  \
+                                   --> /state_estimate
+
+/state_prediction + /scan + /map --> LiDAR/MCL/ICP localization diagnostics
 ```
 
-`/state_prediction` is the wheel/IMU-only motion prior. `/state_estimate` may
-include delayed map-position observations, so it is not used as the high-rate
-control pose in the current localization experiments.
+`/state_prediction` is the wheel/IMU-only motion prior. Corrected poses are
+not currently treated as a validated replacement for `/odom`, and the
+known-map localizers are not SLAM systems.
 
-An optional map-localization experiment adds a known-map position correction:
+## Current evidence
 
-```text
-/state_prediction + /scan + /map
-        ↓
- lidar_localizer → persistent map→odom correction → /localized_estimate
-```
+The current map shows a clear safety margin boundary:
 
-Passing `navigation_pose_topic:=/state_estimate` switches the planner,
-controller, and safety layer to the estimated pose, but this full estimated-
-pose navigation mode is not part of the validated baseline. The estimated
-pose can enter the goal tolerance while the physical `/odom` pose is still
-outside it. The LiDAR localizer is an opt-in experiment and is not a
-validated SLAM replacement. It keeps a stateful `map→odom` correction and can
-broadcast it on TF, but remains diagnostic-only while its asynchronous match
-latency and acceptance gates are being validated. See
-[`docs/STATE_ESTIMATION.md`](docs/STATE_ESTIMATION.md),
-[`docs/POSE_EKF.md`](docs/POSE_EKF.md), and
-[`docs/LOCALIZATION.md`](docs/LOCALIZATION.md). The independent registration
-baseline is documented in [`docs/ICP_LOCALIZATION.md`](docs/ICP_LOCALIZATION.md).
+| Configuration | Success | Mean time-to-goal | Mean measured clearance | Safety override ratio |
+| --- | :---: | ---: | ---: | ---: |
+| Baseline: radius `0.35 m`, no noise | 1/1 | 65.04 s | 0.521 m | 0.000 |
+| Noise `0.05 m`, radius `0.41 m` | 3/3 | 70.49 s | 0.632 m | 0.002 |
+| Delay `0.30 s` + noise `0.05 m`, radius `0.41 m` | 3/3 | 69.38 s | 0.631 m | 0.008 |
 
-The static occupancy grid is published in the `map` frame; in the baseline,
-`map` and Gazebo odometry are numerically aligned, while the optional localizer
-provides the standard `map → odom → base_link` transform.
+The tested `0.40 m` radius is a boundary case: it required sustained safety
+intervention and did not achieve consistent success. These results are
+empirical measurements for the current map and seeds, not a map-independent
+robustness guarantee.
 
-### Current diagnostic conclusion
+![Robustness summary](docs/assets/robustness_summary.png)
 
-The frozen comparison showed that allowing external MCL corrections to drive
-`/state_estimate` increased the physical final error to about `0.108 m`. With
-the same external fusion enabled but control driven by the independent
-`/state_prediction`, the physical error was about `0.062 m`, matching the
-no-external-fusion ablation at about `0.060 m`.
-
-The bounded terminal-recovery test entered `FINAL_APPROACH` and stopped safely
-after its finite distance budget; it did not falsely latch success. However,
-MCL still reported about `0.029 m` to the goal while physical `/odom` remained
-about `0.082 m` away. This is evidence of local-map ambiguity and motion-model
-error, not a reason to continue tuning thresholds.
-
-The current validation boundary is therefore frozen: high-rate control uses
-`/state_prediction`, external map corrections remain diagnostic, and physical
-completion is judged from `/odom`. The next model workstream is documented in
-[`docs/MCL_LOCALIZATION.md`](docs/MCL_LOCALIZATION.md) and
-[`docs/ICP_LOCALIZATION.md`](docs/ICP_LOCALIZATION.md); it is not yet claimed
-to be SLAM or a validated navigation replacement.
-
-The frozen numerical values are not claimed to be map-independent. A new map
-or maze is a validation input, not a reason to retune until it succeeds. The
-generalization test keeps the estimator, matcher, controller, and safety
-configuration fixed while varying only the map and task, then classifies the
-failure layer from the recorded evidence.
-
-The diagnostic layer records source pose stamps, LiDAR stamps, logger receipt
-ages, controller state transitions, confirmation timeouts, and bounded final
-approach behavior. This separates estimator error, local-map ambiguity,
-control-pose selection, and terminal-state logic without hiding failures in
-parameter sweeps.
-
-### State-estimation and localization status
-
-The estimator compares `/wheel_odom`, pure gyro integration, and
-`/state_estimate` against `/odom` without feeding `/odom` into the estimator.
-An estimated-pose navigation check reached its configured tolerance, but the
-physical `/odom` pose remained outside the goal tolerance. Evaluation therefore
-reports historical entry, final-sample proximity, and controller completion
-separately; these are not interchangeable success definitions.
-
-The LiDAR localizer remains diagnostic-only. Its score alternatives and
-covariance/freshness gates help explain ambiguous or stale candidates, but they
-do not turn the bounded local matcher into SLAM. The covariance-aware pose EKF
-is also diagnostic-only until its physical error, covariance calibration, NIS
-values, and measurement rejection behavior are validated across fixed seeds.
-The controller exposes this timing evidence and now supports an optional finite
-`goal_confirmation_timeout_s`. When enabled, failure to obtain the required
-fresh LiDAR/independent-estimate confirmation produces a
-`goal_confirmation_timeout` event and transitions the controller into a
-bounded low-speed `FINAL_APPROACH` state. It does not latch success; the robot
-must leave and re-enter the confirmation region before another confirmation
-attempt. The default `0.0` keeps the legacy wait behavior for controlled
-comparisons. An optional positive `goal_confirmation_max_attempts` bounds the
-number of failed recovery cycles; exhaustion enters `GOAL_UNCONFIRMED`, stops
-safely, and reports `goal_confirmation_failed` instead of looping indefinitely.
-Confirmation also requires the consumed navigation pose to be recent and the
-estimated planar speed to be below the configured confirmation limit, so a
-moving or stale estimate cannot directly latch the goal.
-
-### Probabilistic localization
-
-An experimental known-map particle-filter localizer is available as an
-alternative to the deterministic local matcher. It maintains multiple pose
-hypotheses and reports covariance and ambiguity; see
-[`MCL_LOCALIZATION.md`](docs/MCL_LOCALIZATION.md) for the model and limitations.
+The localization experiments currently support a diagnostic conclusion rather
+than a navigation upgrade. Driving control with external MCL corrections
+increased physical final error to about `0.108 m`; keeping control on the
+independent motion prior reduced it to about `0.062 m`, close to the
+no-external-fusion result of about `0.060 m`. In a bounded recovery run, MCL
+reported about `0.029 m` to the goal while physical `/odom` remained about
+`0.082 m` away.
 
 ## Quick start
 
@@ -249,15 +91,15 @@ conda activate robotics-portfolio
 
 python -m robotics_planning.demo
 python -m unittest discover -s tests -v
+```
 
+Run a small planner benchmark with:
+
+```bash
 python tools/planner_scaling_benchmark.py \
   --sizes 20,50 \
   --densities 0,0.1 \
   --seed-count 2
-
-python tools/summarize_estimation.py \
-  --glob "results/*_metrics.csv" \
-  --output results/estimation_summary.csv
 ```
 
 ### C++ planning core
@@ -266,13 +108,11 @@ python tools/summarize_estimation.py \
 cmake -S cpp -B cpp/build
 cmake --build cpp/build --config Release
 ctest --test-dir cpp/build -C Release --output-on-failure
-./cpp/build/Release/planning_demo.exe
 ```
 
-### ROS2 simulation in WSL2
+### ROS 2 simulation in WSL2
 
-ROS2 Jazzy and Gazebo Harmonic are installed in WSL2 Ubuntu. In a WSL2
-terminal:
+The simulation uses ROS 2 Jazzy and Gazebo Harmonic:
 
 ```bash
 cd /mnt/e/HPC_simulation_porfolio/Robotics/ros2_ws
@@ -282,37 +122,7 @@ source install/setup.bash
 ros2 launch robotics_sim sim.launch.py
 ```
 
-In another WSL2 terminal, the LiDAR diagnostic helper can be run with:
-
-```bash
-cd /mnt/e/HPC_simulation_porfolio/Robotics
-source /opt/ros/jazzy/setup.bash
-source ros2_ws/install/setup.bash
-python3 tools/scan_debug.py
-```
-
-`scan_debug.py` only reads `/scan` and reports minimum front, left, and right
-sector distances. It does not publish commands or modify the simulation.
-
-To render a baseline navigation GIF from the optional CSV trace:
-
-```bash
-python tools/render_baseline_gif.py \
-  --trace results/baseline_trace.csv \
-  --plan results/baseline_plan.csv \
-  --map results/baseline_map.csv \
-  --output docs/assets/baseline_navigation.gif
-```
-
-To save one closed-loop evaluation row when the simulation is stopped:
-
-```bash
-ros2 launch robotics_sim sim.launch.py \
-  evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/closed_loop_metrics.csv
-```
-
-For bounded robustness experiments, let the evaluation logger close the full
-ROS2/Gazebo launch automatically:
+For a bounded evaluation run:
 
 ```bash
 ros2 launch robotics_sim sim.launch.py \
@@ -320,34 +130,46 @@ ros2 launch robotics_sim sim.launch.py \
   evaluation_output:=/mnt/e/HPC_simulation_porfolio/Robotics/results/robustness_case.csv
 ```
 
+The complete validation protocol, launch parameters, trace fields, and
+diagnostic interpretation are in [`METHOD_TECH.md`](METHOD_TECH.md).
+
 ## Repository layout
 
 ```text
 robotics_planning/     Python planners and benchmarks
-cpp/                   C++17 planners, demo, and tests
-ros2_ws/src/          ROS2 navigation and simulation packages
-tools/                Diagnostic scripts
-tests/                Python unit tests
-.github/workflows/    GitHub Actions CI
-METHOD_TECH.md        Detailed methods, equations, diagnostics, and roadmap
+cpp/                   C++ planners, demo, and tests
+ros2_ws/src/           ROS 2 navigation and simulation packages
+tools/                 Evaluation and diagnostic scripts
+tests/                 Python unit tests and fixtures
+results/               Recorded metrics, traces, and experiment summaries
+docs/                  Focused estimation and localization notes
+.github/workflows/     GitHub Actions CI
 ```
 
 ## Documentation
 
-See [METHOD_TECH.md](METHOD_TECH.md) for:
+- [`METHOD_TECH.md`](METHOD_TECH.md) — system model, equations, ROS graph,
+  validation protocol, limitations, and roadmap.
+- [`docs/STATE_ESTIMATION.md`](docs/STATE_ESTIMATION.md) — transparent
+  wheel/IMU fusion.
+- [`docs/POSE_EKF.md`](docs/POSE_EKF.md) — covariance propagation and NIS
+  diagnostics.
+- [`docs/LOCALIZATION.md`](docs/LOCALIZATION.md) — deterministic LiDAR-map
+  matching.
+- [`docs/MCL_LOCALIZATION.md`](docs/MCL_LOCALIZATION.md) — known-map Monte
+  Carlo localization.
+- [`docs/ICP_LOCALIZATION.md`](docs/ICP_LOCALIZATION.md) — point-to-point ICP
+  comparison baseline.
+- [`docs/COUPLED_ESTIMATION.md`](docs/COUPLED_ESTIMATION.md) — external pose
+  updates and estimator/control boundaries.
 
-- differential-drive and controller equations;
-- the overall system equations, planner, safety supervisor, and validation protocol;
-- ROS2 topic flow and launch sequence;
-- parameter meanings and validation protocol;
-- current limitations and the roadmap toward uncertainty, HPC, SLAM, Nav2,
-  and vision.
+## Next step
 
-For focused estimation documentation, see:
-
-- [State Estimation](docs/STATE_ESTIMATION.md) for transparent wheel/IMU fusion;
-- [Pose EKF](docs/POSE_EKF.md) for covariance propagation and NIS diagnostics;
-- [Map-based Localization](docs/LOCALIZATION.md) for the gated LiDAR matcher.
+The next model comparison should keep the controller, safety policy, and
+parameters fixed while evaluating deterministic matching, MCL, and ICP across
+multiple maps and random seeds. The target is to distinguish a localization
+model failure from a genuinely unobservable map geometry before considering
+SLAM or Nav2 integration.
 
 ## License
 
