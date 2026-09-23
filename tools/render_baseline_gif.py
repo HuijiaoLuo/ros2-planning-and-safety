@@ -40,6 +40,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--fps", type=int, default=12)
     parser.add_argument("--max-frames", type=int, default=360)
+    parser.add_argument(
+        "--title",
+        default="Differential-drive A* navigation",
+        help="Title rendered inside the GIF for model/scenario identification.",
+    )
+    parser.add_argument(
+        "--map-context-m",
+        type=float,
+        default=1.2,
+        help=(
+            "Map context retained around the trajectory and plan. This keeps "
+            "relevant corridor walls visible without showing the full world."
+        ),
+    )
     return parser
 
 
@@ -74,13 +88,41 @@ def main() -> None:
 
     all_x = trace_x + plan_x + [goal_x]
     all_y = trace_y + plan_y + [goal_y]
-    x_min, x_max = min(all_x) - 0.45, max(all_x) + 0.45
-    y_min, y_max = min(all_y) - 0.75, max(all_y) + 0.75
+    base_x_min, base_x_max = min(all_x) - 0.45, max(all_x) + 0.45
+    base_y_min, base_y_max = min(all_y) - 0.75, max(all_y) + 0.75
+    map_resolution = (
+        float(occupied[0].get("resolution_m", 0.1)) if occupied else 0.1
+    )
+    context_x_min = min(all_x) - args.map_context_m
+    context_x_max = max(all_x) + args.map_context_m
+    context_y_min = min(all_y) - args.map_context_m
+    context_y_max = max(all_y) + args.map_context_m
     visible_map = [
         (x, y)
         for x, y in zip(map_x, map_y)
-        if x_min <= x <= x_max and y_min <= y <= y_max
+        if context_x_min <= x <= context_x_max
+        and context_y_min <= y <= context_y_max
     ]
+    if visible_map:
+        x_min = min(
+            base_x_min,
+            min(x for x, _ in visible_map) - 0.5 * map_resolution - 0.15,
+        )
+        x_max = max(
+            base_x_max,
+            max(x for x, _ in visible_map) + 0.5 * map_resolution + 0.15,
+        )
+        y_min = min(
+            base_y_min,
+            min(y for _, y in visible_map) - 0.5 * map_resolution - 0.15,
+        )
+        y_max = max(
+            base_y_max,
+            max(y for _, y in visible_map) + 0.5 * map_resolution + 0.15,
+        )
+    else:
+        x_min, x_max = base_x_min, base_x_max
+        y_min, y_max = base_y_min, base_y_max
 
     figure, axis = plt.subplots(figsize=(8.0, 5.0), dpi=120)
     axis.set_aspect("equal", adjustable="box")
@@ -88,20 +130,28 @@ def main() -> None:
     axis.set_ylim(y_min, y_max)
     axis.set_xlabel("x [m]")
     axis.set_ylabel("y [m]")
-    axis.set_title("Differential-drive A* navigation")
+    axis.set_title(args.title)
     axis.grid(True, alpha=0.25)
 
-    if visible_map:
-        axis.scatter(
-            [point[0] for point in visible_map],
-            [point[1] for point in visible_map],
-            marker="s",
-            s=42,
-            color="#555555",
-            label="occupied cells",
-            zorder=1,
+    from matplotlib.patches import Patch, Rectangle
+
+    for x, y in visible_map:
+        axis.add_patch(
+            Rectangle(
+                (x - 0.5 * map_resolution, y - 0.5 * map_resolution),
+                map_resolution,
+                map_resolution,
+                facecolor="#555555",
+                edgecolor="none",
+                zorder=1,
+            )
         )
-    axis.plot(
+    map_legend = Patch(
+        facecolor="#555555",
+        edgecolor="none",
+        label="occupied cells",
+    )
+    plan_line, = axis.plot(
         plan_x,
         plan_y,
         "--",
@@ -110,7 +160,7 @@ def main() -> None:
         label="A* path",
         zorder=2,
     )
-    axis.scatter(
+    start_marker = axis.scatter(
         [trace_x[0]],
         [trace_y[0]],
         marker="o",
@@ -119,7 +169,7 @@ def main() -> None:
         label="start",
         zorder=4,
     )
-    axis.scatter(
+    goal_marker = axis.scatter(
         [goal_x],
         [goal_y],
         marker="*",
@@ -133,7 +183,7 @@ def main() -> None:
         [],
         color="#dc2626",
         linewidth=2.0,
-        label="executed trajectory",
+        label="physical /odom trajectory",
         zorder=3,
     )
     robot, = axis.plot([], [], "o", color="#0ea5e9", markersize=9, label="robot", zorder=5)
@@ -149,7 +199,26 @@ def main() -> None:
         bbox={"facecolor": "white", "alpha": 0.82, "edgecolor": "none"},
         zorder=6,
     )
-    axis.legend(loc="lower right", fontsize=8)
+    axis.legend(
+        handles=[
+            map_legend,
+            plan_line,
+            start_marker,
+            goal_marker,
+            trajectory,
+            robot,
+        ],
+        labels=[
+            "occupied cells",
+            "A* path",
+            "start",
+            "goal",
+            "physical /odom trajectory",
+            "robot",
+        ],
+        loc="lower right",
+        fontsize=8,
+    )
 
     indices = frame_indices(len(trace), max(2, args.max_frames))
 

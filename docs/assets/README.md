@@ -1,11 +1,13 @@
 # Visual assets
 
-These visuals are generated from recorded ROS 2 traces with
-[`tools/render_baseline_gif.py`](../../tools/render_baseline_gif.py). On a
-Windows environment without the Python plotting packages, the equivalent
-fallback is [`tools/render_navigation_gif.ps1`](../../tools/render_navigation_gif.ps1).
-They are representative replays, not averages across the full experiment
-matrix.
+These visuals are generated from recorded ROS 2 traces with the single
+canonical renderer [`tools/render_baseline_gif.py`](../../tools/render_baseline_gif.py).
+Run [`tools/render_navigation_comparison.sh`](../../tools/render_navigation_comparison.sh)
+to regenerate all four homepage comparison GIFs with identical map geometry,
+axis limits, labels, and legend styling. The PowerShell
+[`tools/render_navigation_gif.ps1`](../../tools/render_navigation_gif.ps1) is a
+dependency-free fallback for individual previews, not the canonical homepage
+comparison renderer.
 
 Each navigation GIF uses the same visual language:
 
@@ -14,6 +16,13 @@ Each navigation GIF uses the same visual language:
 - red line: the executed `/odom` trajectory;
 - cyan marker: the simulated robot;
 - yellow star: the goal.
+
+The homepage comparison is arranged by scenario, not by map variant: the top
+row is `baseline_obstacle`, the bottom row is `l_corridor`; the left column is
+the original fixed-fusion run and the right column is the validated EKF run.
+The red line is the physical `/odom` trajectory, while the blue dashed line is
+the planned path. The GIF does not draw `/state_estimate` as a second line;
+the estimator improvement is reflected in the robot's closed-loop trajectory.
 
 ## Navigation replays
 
