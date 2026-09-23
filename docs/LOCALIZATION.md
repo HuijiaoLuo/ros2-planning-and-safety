@@ -84,10 +84,11 @@ solver and does not estimate a map or a loop closure.
 
 The search optimizer is also explicit. `localization_optimizer_mode:=grid`
 keeps the exhaustive bounded grid used by the baseline. The optional
-`coarse_to_fine` mode evaluates a coarser global grid first and refines the
-best `localization_refine_top_k` basins. It is still derivative-free and
-deterministic; it is a search-efficiency/precision variant, not a solution to
-ambiguous map geometry. Each audit result records the second-best score,
+`coarse_to_fine` mode is a **multi-resolution grid search**: it evaluates a
+coarser global grid first and refines the best
+`localization_refine_top_k` basins. This is not the numerical-PDE meaning of
+multigrid; it is still a deterministic, derivative-free search-efficiency
+variant, not a solution to ambiguous map geometry. Each audit result records the second-best score,
 score margin, evaluated candidate count, whether the best candidate lies near
 the search boundary, and the decomposition of the selected score into scan
 residual and odometry-prior penalty. This decomposition is diagnostic: it

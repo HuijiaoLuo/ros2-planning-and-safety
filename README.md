@@ -9,6 +9,10 @@ The central question is:
 
 > How should a robot turn map and sensor measurements into safe motion commands?
 
+At the system level, this is a ROS 2 robotics validation framework spanning
+classical navigation, closed-loop control, LiDAR safety, wheel/IMU EKF state
+estimation, uncertainty calibration, and failure diagnostics.
+
 <p align="center">
   <img src="docs/assets/baseline_navigation.gif" alt="Baseline A* navigation with a differential-drive robot" width="820">
 </p>

@@ -6,11 +6,12 @@ Each input is a trace CSV written by ``estimation_logger`` with
 the covariance reported by the estimator, but it never changes estimator
 parameters or feeds truth back into navigation.
 
-For a calibrated Gaussian estimate, the expected mean normalized squared
-error is approximately the state dimension: 2 for the joint x/y position and
-1 for a scalar heading.  The reported coverage values use chi-square 95%
-thresholds (5.991 for two dimensions and 3.841 for one dimension).  These are
-diagnostic indicators, not guarantees, because trajectory samples are
+For a calibrated Gaussian estimate, this tool reports raw joint NEES: the
+expected mean is approximately the state dimension, 2 for the joint x/y
+position and 1 for a scalar heading.  It does not divide the position value
+by its two degrees of freedom.  The reported coverage values use chi-square
+95% thresholds (5.991 for two dimensions and 3.841 for one dimension).  These
+are diagnostic indicators, not guarantees, because trajectory samples are
 temporally correlated.
 """
 

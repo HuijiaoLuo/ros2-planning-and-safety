@@ -212,17 +212,23 @@ Gazebo publishes an IMU on `/imu`. The estimator consumes only the IMU angular
 velocity, not its orientation field. This prevents the simulated perfect
 orientation from becoming a hidden ground-truth input.
 
-The gyro heading is integrated as:
+The fixed V3 estimator first propagates its heading with the IMU angular rate:
 
 $$
-\theta^{\mathrm{imu}}_{k+1} = \mathrm{wrap}\left(\theta^{\mathrm{imu}}_{k} + \omega_{z,k}\Delta t\right)
+\theta_k^- = \mathrm{wrap}\left(\theta_{k-1}^{\mathrm{fused}} + \omega_{z,k}\Delta t_k\right)
 $$
 
-The current fused state is then slowly corrected toward wheel-odometry yaw:
+When a wheel-yaw sample is available, it then applies a small complementary
+correction:
 
 $$
-\theta^{\mathrm{fused}}_k = \mathrm{wrap}\left(\theta^{\mathrm{fused}}_k + \lambda\,\mathrm{wrap}\left(\theta^{\mathrm{wheel}}_k - \theta^{\mathrm{fused}}_k\right)\right)
+\theta_k^{\mathrm{fused}} = \mathrm{wrap}\left(\theta_k^- + \lambda\,\mathrm{wrap}\left(\theta_k^{\mathrm{wheel}} - \theta_k^-\right)\right)
 $$
+
+With no wheel update, the propagated value $\theta_k^-$ remains active. The
+ROS callbacks are asynchronous; these equations express the equivalent
+prediction-then-correction sequence, while the implementation applies each
+operation when its corresponding message arrives.
 
 The launch parameter `wheel_weight` is the transparent tuning parameter
 $\lambda$, with default $\lambda = 0.02$. It gives the gyro short-term
@@ -425,8 +431,10 @@ bounded local grid.
 
 The optimizer is a bounded derivative-free search. `grid` exhaustively
 evaluates the configured circular x/y grid and is the reference behavior.
-`coarse_to_fine` first evaluates a coarser global grid, then refines the best
-few basins at the nominal resolution. It does not assume differentiability;
+`coarse_to_fine` is a **multi-resolution grid search**: it first evaluates a
+coarser global grid, then refines the best few basins at the nominal
+resolution. This is not the numerical-PDE meaning of multigrid. It does not
+assume differentiability;
 the occupancy-grid objective contains discontinuities from ray hits, invalid
 returns, and residual clipping. Audit records expose the second-best score,
 score margin, candidate distance from the prior, search-boundary flag, and

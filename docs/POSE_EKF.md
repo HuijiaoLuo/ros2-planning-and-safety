@@ -538,10 +538,13 @@ python tools/summarize_covariance_calibration.py \
   --output results/v4_ekf_covariance_calibration.csv
 ```
 
-For a reasonably calibrated Gaussian covariance, the mean joint position
-normalized error should be near `2`, the mean heading value near `1`, and the
-95-percent coverage should be near `0.95`. The reported position and heading
-coverage use the 2-D and 1-D chi-square thresholds `5.991` and `3.841`.
+The reported position value is the **raw joint NEES** for the two-dimensional
+$(x,y)$ error; it is not divided by its two degrees of freedom. For a
+reasonably calibrated Gaussian covariance, its mean should therefore be near
+`2`. The scalar heading NEES has one degree of freedom, so its mean should be
+near `1`. The reported position and heading coverage use the 2-D and 1-D
+chi-square thresholds `5.991` and `3.841`, respectively, and should be near
+`0.95` over sufficiently many independent trials.
 Trajectory samples are correlated, so these are calibration diagnostics and
 not independent confidence guarantees. The current smoke covariance is known
 to be broad in x/y; this trace is the required evidence before using a

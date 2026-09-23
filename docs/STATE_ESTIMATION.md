@@ -33,26 +33,34 @@ it is a measurement perturbation, not a Gazebo tire-contact simulation.
 
 ## Heading integration and complementary fusion
 
-For an IMU sample at time step $k$:
+For an IMU sample at time step $k$, the estimator first propagates the fused
+heading with the measured angular rate:
 
 $$
-\theta^{\mathrm{imu}}_{k+1}
+\theta_k^{-}
 =\mathrm{wrap}\left(
-\theta^{\mathrm{imu}}_{k}+\omega_{z,k}\Delta t_k
+\theta_{k-1}^{\mathrm{fused}}+\omega_{z,k}\Delta t_k
 \right).
 $$
 
-The fixed fusion mode applies a small correction toward wheel yaw:
+When a wheel-yaw update is available, fixed complementary fusion then applies
+a small correction toward that measurement:
 
 $$
-\theta^{\mathrm{fused}}_{k}
+\theta_k^{\mathrm{fused}}
 =\mathrm{wrap}\left(
-\theta^{\mathrm{fused}}_{k-1}
+\theta_k^{-}
 +\lambda\mathrm{wrap}\left(
-\theta^{\mathrm{wheel}}_{k}-\theta^{\mathrm{fused}}_{k-1}
+\theta_k^{\mathrm{wheel}}-\theta_k^{-}
 \right)
 \right).
 $$
+
+If no wheel update is available at that callback, the propagated value
+$\theta_k^{-}$ remains the current fused heading. The ROS callbacks are
+asynchronous, so the implementation applies these two operations whenever the
+corresponding IMU and wheel messages arrive; the equations describe the
+equivalent prediction-then-correction sequence.
 
 `wheel_weight` is the transparent tuning parameter $\lambda$. The default
 value is `0.02`; it is not a covariance-derived Kalman gain.
