@@ -611,6 +611,7 @@ def generate_launch_description():
                 executable="parameter_bridge",
                 name="ros_gz_bridge",
                 arguments=[
+                    "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock",
                     "/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist",
                     "/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
                     "/wheel_odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
