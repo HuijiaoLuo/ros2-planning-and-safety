@@ -23,18 +23,47 @@ one ROS 2 + Gazebo validation workflow.
     <th>Validated EKF configuration</th>
   </tr>
   <tr>
-    <td><img src="docs/assets/baseline_obstacle_navigation.gif" alt="Baseline obstacle replay with fixed fusion" width="420"></td>
-    <td><img src="docs/assets/baseline_obstacle_ekf_navigation.gif" alt="Baseline obstacle replay with validated EKF" width="420"></td>
+    <td>
+      <strong>Baseline obstacle</strong><br>
+      <small>One central obstacle; the robot detours around it.</small><br>
+      <img src="docs/assets/baseline_obstacle_navigation.gif" alt="Baseline obstacle replay with fixed fusion" width="420"><br>
+      <small>Original fusion: accumulated endpoint drift is visible.</small>
+    </td>
+    <td>
+      <strong>Baseline obstacle</strong><br>
+      <small>The same map and route after the EKF validation.</small><br>
+      <img src="docs/assets/baseline_obstacle_ekf_navigation.gif" alt="Baseline obstacle replay with validated EKF" width="420"><br>
+      <small>Validated EKF: the physical path stays closer to the goal.</small>
+    </td>
   </tr>
   <tr>
-    <td><img src="docs/assets/l_corridor_navigation.gif" alt="L corridor replay with fixed fusion" width="420"></td>
-    <td><img src="docs/assets/l_corridor_ekf_navigation.gif" alt="L corridor replay with validated EKF" width="420"></td>
+    <td>
+      <strong>L corridor</strong><br>
+      <small>An L-shaped wall forces a sharper turn.</small><br>
+      <img src="docs/assets/l_corridor_navigation.gif" alt="L corridor replay with fixed fusion" width="420"><br>
+      <small>Original fusion: the turn makes the drift easier to see.</small>
+    </td>
+    <td>
+      <strong>L corridor</strong><br>
+      <small>The same constrained route with the validated estimator.</small><br>
+      <img src="docs/assets/l_corridor_ekf_navigation.gif" alt="L corridor replay with validated EKF" width="420"><br>
+      <small>Validated EKF: less accumulated wheel/state-estimation drift.</small>
+    </td>
   </tr>
 </table>
 
-The left column shows the original detour drift; the right column uses
+Read the comparison from left to right: both columns use the same recorded map
+and planned A* route, while the right column uses
 `fusion_mode:=ekf`, `position_mode:=propagated`, fixed zero gyro bias, and
-`wheel_yaw_noise_std_rad:=0.20`. Details and provenance are in
+`wheel_yaw_noise_std_rad:=0.20`. Read it from top to bottom to compare the
+simple obstacle scene with the more constrained L-shaped corridor.
+
+In every replay, gray cells are occupied map cells, the blue dashed line is
+the planned A* path, and the red line is the executed physical `/odom`
+trajectory. The cyan dot is the robot, the green dot is the start, and the
+yellow star is the goal. The GIFs do not draw `/state_estimate` as a second
+line; the estimator change is judged by how closely the physical trajectory
+follows the plan and reaches the goal. Details and provenance are in
 [`docs/assets/README.md`](docs/assets/README.md).
 
 ## Status at a glance
