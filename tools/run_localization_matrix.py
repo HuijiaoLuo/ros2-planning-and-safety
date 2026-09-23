@@ -140,9 +140,11 @@ def build_command(
     output_dir: Path,
     experiment_timeout_s: float,
     mcl_initialization_mode: str,
+    localization_max_correction_m: float | None = None,
+    localization_max_total_correction_m: float | None = None,
 ) -> list[str]:
     paths = artifact_paths(output_dir, spec)
-    return [
+    command = [
         "ros2",
         "launch",
         "robotics_sim",
@@ -167,6 +169,16 @@ def build_command(
         f"estimation_trace_output:={paths['estimation_trace']}",
         f"localization_diagnostic_output:={paths['diagnostic']}",
     ]
+    if localization_max_correction_m is not None:
+        command.append(
+            f"localization_max_correction_m:={localization_max_correction_m:.6f}"
+        )
+    if localization_max_total_correction_m is not None:
+        command.append(
+            "localization_max_total_correction_m:="
+            f"{localization_max_total_correction_m:.6f}"
+        )
+    return command
 
 
 def write_manifest(path: Path, rows: list[dict[str, object]]) -> None:
@@ -229,6 +241,24 @@ def parse_args() -> argparse.Namespace:
         help="MCL prior mode used for the matrix.",
     )
     parser.add_argument(
+        "--localization-max-correction-m",
+        type=float,
+        default=None,
+        help=(
+            "Optional localization displacement gate override for a controlled "
+            "A/B experiment."
+        ),
+    )
+    parser.add_argument(
+        "--localization-max-total-correction-m",
+        type=float,
+        default=None,
+        help=(
+            "Optional accumulated localization displacement gate override for "
+            "a controlled A/B experiment."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print commands without starting ROS 2.",
@@ -255,6 +285,14 @@ def main() -> int:
     if args.experiment_timeout_s <= 0.0:
         print("--experiment-timeout-s must be positive", file=sys.stderr)
         return 2
+    for option_name in (
+        "localization_max_correction_m",
+        "localization_max_total_correction_m",
+    ):
+        value = getattr(args, option_name)
+        if value is not None and value <= 0.0:
+            print(f"--{option_name.replace('_', '-')} must be positive", file=sys.stderr)
+            return 2
 
     if not args.dry_run:
         args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -268,6 +306,10 @@ def main() -> int:
             output_dir=args.output_dir,
             experiment_timeout_s=args.experiment_timeout_s,
             mcl_initialization_mode=args.mcl_initialization_mode,
+            localization_max_correction_m=args.localization_max_correction_m,
+            localization_max_total_correction_m=(
+                args.localization_max_total_correction_m
+            ),
         )
         print(f"[{index}/{len(specs)}] {spec.stem}")
         print(" ".join(command))

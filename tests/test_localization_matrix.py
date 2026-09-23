@@ -55,6 +55,20 @@ class LocalizationMatrixTests(unittest.TestCase):
         self.assertIn("mcl_random_seed:=2", command)
         self.assertIn("experiment_timeout_s:=120.000000", command)
 
+    def test_command_can_override_localization_displacement_gates(self) -> None:
+        command = build_command(
+            RunSpec("baseline_obstacle", "v4", 0),
+            output_dir=Path("results/localization_matrix"),
+            experiment_timeout_s=120.0,
+            mcl_initialization_mode="local",
+            localization_max_correction_m=0.30,
+            localization_max_total_correction_m=0.35,
+        )
+        self.assertIn("localization_max_correction_m:=0.300000", command)
+        self.assertIn(
+            "localization_max_total_correction_m:=0.350000", command
+        )
+
     def test_incomplete_artifacts_are_not_a_successful_run(self) -> None:
         paths = {
             "evaluation": FakeArtifact(

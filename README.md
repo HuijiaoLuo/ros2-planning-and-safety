@@ -73,13 +73,12 @@ robustness guarantee.
 
 ![Robustness summary](docs/assets/robustness_summary.png)
 
-The localization experiments currently support a diagnostic conclusion rather
-than a navigation upgrade. Driving control with external MCL corrections
-increased physical final error to about `0.108 m`; keeping control on the
-independent motion prior reduced it to about `0.062 m`, close to the
-no-external-fusion result of about `0.060 m`. In a bounded recovery run, MCL
-reported about `0.029 m` to the goal while physical `/odom` remained about
-`0.082 m` away.
+The first 27-run localization matrix completed without infrastructure failures.
+The symmetric corridor reached the physical goal in `9/9` runs, while the
+baseline obstacle and L-corridor scenes reached `0/9`; their common
+`/state_estimate` drift is about `0.19 m` relative to `/odom`. These results are
+diagnostic evidence, not yet a navigation upgrade. The visual replay guide is
+in [`docs/assets/README.md`](docs/assets/README.md).
 
 ## Quick start
 
@@ -149,6 +148,7 @@ To run the first fixed localization matrix from a ROS 2 shell:
 python3 tools/run_localization_matrix.py --dry-run
 python3 tools/run_localization_matrix.py
 python3 tools/summarize_localization_matrix.py
+python3 tools/analyze_localization_drift.py
 ```
 
 The default matrix contains three scenarios, three localization backends, and
