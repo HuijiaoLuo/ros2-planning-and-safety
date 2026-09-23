@@ -69,15 +69,7 @@ validity is established.
 The important engineering chain is:
 
 $$
-\text{physical model}
-\rightarrow
-\text{measurement}
-\rightarrow
-\text{state/control model}
-\rightarrow
-\text{decision}
-\rightarrow
-\text{validation}
+\text{physical model} \rightarrow \text{measurement} \rightarrow \text{state/control model} \rightarrow \text{decision} \rightarrow \text{validation}
 $$
 
 ROS2 is the communication architecture. Gazebo is the physics and sensor simulation. The core question is how imperfect measurements should be translated into safe motion commands.
@@ -142,9 +134,7 @@ $$
 The physical wheel speeds are related to the body command by:
 
 $$
-v_L = v - \frac{L}{2}\omega,
-\qquad
-v_R = v + \frac{L}{2}\omega
+v_L = v - \frac{L}{2}\omega, \qquad v_R = v + \frac{L}{2}\omega
 $$
 
 where $L$ is the distance between the wheel contact points. Gazebo's DiffDrive system uses the two wheel joints, wheel radius, and wheel separation to apply this model to the simulated robot.
@@ -279,8 +269,7 @@ $T_{\mathrm{map}\leftarrow\mathrm{odom}}$. If the current odometry pose is
 $p_{\mathrm{odom}}$, the published localized pose is
 
 $$
-p_{\mathrm{map}} = T_{\mathrm{map}\leftarrow\mathrm{odom}}
-\oplus p_{\mathrm{odom}}.
+p_{\mathrm{map}} = T_{\mathrm{map}\leftarrow\mathrm{odom}} \oplus p_{\mathrm{odom}}.
 $$
 
 and a covariance-derived wheel-yaw gain:
@@ -312,11 +301,7 @@ $$
 The wheel measurement variance is then updated as
 
 $$
-R_{\mathrm{wheel},k}
-= \min\left(
-R_{\max},
-\max\left(R_{\min},\widehat{S}_{k}-P_{k}^{-}\right)
-\right).
+R_{\mathrm{wheel},k} = \min\left(R_{\max},\max\left(R_{\min},\widehat{S}_{k}-P_{k}^{-}\right)\right).
 $$
 
 Here $\nu_{k}$ is measured in radians, while $\widehat{S}_{k}$, $P_{k}^{-}$,
@@ -435,9 +420,7 @@ $n_{j(i)}$ be its occupied-to-free normal. The point-to-line residual used by
 the implementation is
 
 $$
-e_i^{\mathrm{line}}=
-\left|n_{j(i)}^{\mathsf T}(p_i-q_i)\right|
-+\frac{1}{2}\left\|p_i-q_i\right\|_2.
+e_i^{\mathrm{line}} = \left|n_{j(i)}^{\mathsf T}(p_i-q_i)\right| + \frac{1}{2}\left\|p_i-q_i\right\|_2.
 $$
 
 The first term measures normal alignment; the second discourages an endpoint
@@ -648,10 +631,7 @@ deviation $\sigma_s$, the
 additional position sensitivity is
 
 $$
-G_{s,k}=\left(
--v_{x,k}\Delta t_k\cos(\theta_{\mathrm{mid},k}),\,
--v_{x,k}\Delta t_k\sin(\theta_{\mathrm{mid},k}),\,0,\,0,\,0
-\right)^{\mathsf T}.
+G_{s,k}=\left(-v_{x,k}\Delta t_k\cos(\theta_{\mathrm{mid},k}),\,-v_{x,k}\Delta t_k\sin(\theta_{\mathrm{mid},k}),\,0,\,0,\,0\right)^{\mathsf T}.
 $$
 
 and the corresponding contribution is
@@ -671,13 +651,11 @@ $$
 $$
 
 $$
-\nu_{k} = \mathrm{wrap}(\theta_{k}^{\mathrm{wheel}} -
-\theta_k^- - b_{w,k}^-)
+\nu_{k} = \mathrm{wrap}(\theta_{k}^{\mathrm{wheel}} - \theta_k^- - b_{w,k}^-)
 $$
 
 $$
-S_{k} = H P_k^- H^{\mathsf T} + R_{\mathrm{wheel}},
-\qquad H=[0\;0\;1\;0\;1]
+S_{k} = H P_k^- H^{\mathsf T} + R_{\mathrm{wheel}}, \qquad H=[0\;0\;1\;0\;1]
 $$
 
 $$
@@ -1820,13 +1798,7 @@ expanded nodes
 That connects the ROS2 system back to the original portfolio theme:
 
 $$
-\text{measurement}
-\rightarrow
-\text{model}
-\rightarrow
-\text{decision}
-\rightarrow
-\text{quantitative validation}
+\text{measurement} \rightarrow \text{model} \rightarrow \text{decision} \rightarrow \text{quantitative validation}
 $$
 
 ## 14. Meaning of the main WSL commands

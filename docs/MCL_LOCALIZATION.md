@@ -85,12 +85,7 @@ p_{i,y}^{\mathrm{map},(j)} = y^{(j)} + r_i\sin\left(\theta^{(j)}+\alpha_i\right)
 $$
 
 $$
-p\left(z_i \mid \mathbf{x}^{(j)}, M\right)
-=
-\exp\left(
--\frac{d_i\left(\mathbf{x}^{(j)},M\right)^2}
-{2\sigma_{\mathrm{range}}^2}
-\right) + \varepsilon
+p\left(z_i \mid \mathbf{x}^{(j)}, M\right) = \exp\left(-\frac{d_i\left(\mathbf{x}^{(j)},M\right)^2}{2\sigma_{\mathrm{range}}^2}\right) + \varepsilon
 $$
 
 The particle weight is updated by the mean log likelihood over valid beams.
@@ -103,27 +98,22 @@ particle poses. The adapter therefore supports a small fixed window of recent
 scans. Each scan is retained with the state-estimate pose available when the
 scan arrived. Before scoring, its odometry motion to the current pose is
 recorded as a relative transform. For a current particle pose
-\(\mathbf{x}_k\), the historical scan pose is reconstructed as
+$\mathbf{x}_k$, the historical scan pose is reconstructed as
 
 $$
-\mathbf{x}_{k-j}^{(i)}
-=
-\mathbf{x}_k^{(i)} \boxminus \Delta\mathbf{x}_{k-j\rightarrow k},
+\mathbf{x}_{k-j}^{(i)} = \mathbf{x}_k^{(i)} \boxminus \Delta\mathbf{x}_{k-j\rightarrow k},
 $$
 
-where \(\boxminus\) denotes composition with the inverse planar rigid-body
+where $\boxminus$ denotes composition with the inverse planar rigid-body
 transform, including the wrapped yaw difference. The old scan is therefore
 evaluated at the pose where it was measured, while all particles still
 represent the current pose.
 
-For a window of \(W\) independent scans, the measurement evidence is combined
+For a window of $W$ independent scans, the measurement evidence is combined
 as the product of the per-scan likelihood blocks. In the log domain this is:
 
 $$
-\ell_{\mathrm{window}}(\mathbf{x}_k^{(i)})
-=
-\sum_{j=0}^{W-1}
-\ell_j\left(\mathbf{x}_{k-j}^{(i)}\right).
+\ell_{\mathrm{window}}(\mathbf{x}_k^{(i)}) = \sum_{j=0}^{W-1} \ell_j\left(\mathbf{x}_{k-j}^{(i)}\right).
 $$
 
 The prior particle weight is combined with this value before normalization
@@ -163,8 +153,7 @@ $P_{xx}$ and $P_{yy}$ be the particle covariance entries after the candidate
 measurement update. The candidate planar one-sigma bound is
 
 $$
-\sigma_{xy,k}
-= \max\left(\sqrt{P_{xx,k}},\sqrt{P_{yy,k}}\right).
+\sigma_{xy,k} = \max\left(\sqrt{P_{xx,k}},\sqrt{P_{yy,k}}\right).
 $$
 
 The navigation adapter applies the candidate only when
@@ -182,15 +171,7 @@ correction when the normalized particle entropy $H_k$ remains above the
 configured information bound $H_{\max}$:
 
 $$
-\mathrm{apply}_k
-=
-\left(\sigma_{xy,k} \leq \sigma_{xy,\max}\right)
-\land
-\left(
-H_k \leq H_{\max}
-\ \lor\
-\left\|\Delta \mathbf{p}_k\right\|_2 \leq \sigma_{xy,\max}
-\right).
+\mathrm{apply}_k = \left(\sigma_{xy,k} \leq \sigma_{xy,\max}\right) \land \left(H_k \leq H_{\max} \ \lor\ \left\|\Delta \mathbf{p}_k\right\|_2 \leq \sigma_{xy,\max}\right).
 $$
 
 This preserves small, non-disruptive updates while preventing an almost
