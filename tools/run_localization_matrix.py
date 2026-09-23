@@ -140,6 +140,10 @@ def build_command(
     output_dir: Path,
     experiment_timeout_s: float,
     mcl_initialization_mode: str,
+    fusion_mode: str | None = None,
+    position_mode: str | None = None,
+    gyro_bias_mode: str | None = None,
+    wheel_yaw_noise_std_rad: float | None = None,
     localization_max_correction_m: float | None = None,
     localization_max_total_correction_m: float | None = None,
 ) -> list[str]:
@@ -177,6 +181,16 @@ def build_command(
         command.append(
             "localization_max_total_correction_m:="
             f"{localization_max_total_correction_m:.6f}"
+        )
+    if fusion_mode is not None:
+        command.append(f"fusion_mode:={fusion_mode}")
+    if position_mode is not None:
+        command.append(f"position_mode:={position_mode}")
+    if gyro_bias_mode is not None:
+        command.append(f"gyro_bias_mode:={gyro_bias_mode}")
+    if wheel_yaw_noise_std_rad is not None:
+        command.append(
+            f"wheel_yaw_noise_std_rad:={wheel_yaw_noise_std_rad:.6f}"
         )
     return command
 
@@ -241,6 +255,33 @@ def parse_args() -> argparse.Namespace:
         help="MCL prior mode used for the matrix.",
     )
     parser.add_argument(
+        "--fusion-mode",
+        choices=("fixed", "adaptive", "ekf"),
+        default=None,
+        help="Optional estimator fusion mode for a controlled comparison.",
+    )
+    parser.add_argument(
+        "--position-mode",
+        choices=("wheel_pose", "propagated"),
+        default=None,
+        help="Optional estimator position model for a controlled comparison.",
+    )
+    parser.add_argument(
+        "--gyro-bias-mode",
+        choices=("estimated", "fixed"),
+        default=None,
+        help="Optional pose-EKF gyro-bias mode for a controlled comparison.",
+    )
+    parser.add_argument(
+        "--wheel-yaw-noise-std-rad",
+        type=float,
+        default=None,
+        help=(
+            "Optional wheel-yaw measurement noise for adaptive fusion or the "
+            "pose EKF."
+        ),
+    )
+    parser.add_argument(
         "--localization-max-correction-m",
         type=float,
         default=None,
@@ -293,6 +334,12 @@ def main() -> int:
         if value is not None and value <= 0.0:
             print(f"--{option_name.replace('_', '-')} must be positive", file=sys.stderr)
             return 2
+    if (
+        args.wheel_yaw_noise_std_rad is not None
+        and args.wheel_yaw_noise_std_rad < 0.0
+    ):
+        print("--wheel-yaw-noise-std-rad must be nonnegative", file=sys.stderr)
+        return 2
 
     if not args.dry_run:
         args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -306,6 +353,10 @@ def main() -> int:
             output_dir=args.output_dir,
             experiment_timeout_s=args.experiment_timeout_s,
             mcl_initialization_mode=args.mcl_initialization_mode,
+            fusion_mode=args.fusion_mode,
+            position_mode=args.position_mode,
+            gyro_bias_mode=args.gyro_bias_mode,
+            wheel_yaw_noise_std_rad=args.wheel_yaw_noise_std_rad,
             localization_max_correction_m=args.localization_max_correction_m,
             localization_max_total_correction_m=(
                 args.localization_max_total_correction_m

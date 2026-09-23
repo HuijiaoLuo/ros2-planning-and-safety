@@ -77,8 +77,12 @@ The first 27-run localization matrix completed without infrastructure failures.
 The symmetric corridor reached the physical goal in `9/9` runs, while the
 baseline obstacle and L-corridor scenes reached `0/9`; their common
 `/state_estimate` drift is about `0.19 m` relative to `/odom`. These results are
-diagnostic evidence, not yet a navigation upgrade. The visual replay guide is
-in [`docs/assets/README.md`](docs/assets/README.md).
+diagnostic evidence for the original fixed-fusion configuration. A controlled
+v4 run with `ekf + propagated`, fixed zero gyro bias, and `0.20 rad` wheel-yaw
+noise reduced the seed-0 state error to `0.016 m` in baseline and `0.048 m` in
+the L-corridor, with both runs reaching the goal. Three-seed validation is
+still pending before changing defaults. The visual replay guide is in
+[`docs/assets/README.md`](docs/assets/README.md).
 
 ## Quick start
 
@@ -170,6 +174,32 @@ python3 tools/run_localization_matrix.py \
 If the smoke run is incomplete, inspect its `*_launch.log` and the
 `matrix_manifest.csv` failure reason before rerunning the full matrix.
 
+To isolate wheel/state-estimation drift after a detour, compare the two
+controlled v4 variants below, then run the drift analyzer on each output:
+
+```bash
+python3 tools/run_localization_matrix.py \
+  --scenarios baseline_obstacle,l_corridor --backends v4 --seeds 0 \
+  --output-dir results/estimator_ab_adaptive_propagated \
+  --fusion-mode adaptive --position-mode propagated
+
+python3 tools/run_localization_matrix.py \
+  --scenarios baseline_obstacle,l_corridor --backends v4 --seeds 0 \
+  --output-dir results/estimator_ab_ekf_propagated \
+  --fusion-mode ekf --position-mode propagated
+
+python3 tools/analyze_localization_drift.py \
+  --input-dir results/estimator_ab_adaptive_propagated \
+  --output-dir results/estimator_ab_adaptive_propagated
+python3 tools/analyze_localization_drift.py \
+  --input-dir results/estimator_ab_ekf_propagated \
+  --output-dir results/estimator_ab_ekf_propagated
+```
+
+If EKF still follows wheel yaw, repeat it with
+`--gyro-bias-mode fixed --wheel-yaw-noise-std-rad 0.20` to test whether the
+detour error is caused by over-trusting wheel yaw.
+
 The complete validation protocol, launch parameters, trace fields, and
 diagnostic interpretation are in [`METHOD_TECH.md`](METHOD_TECH.md).
 
@@ -205,11 +235,10 @@ docs/                  Focused estimation and localization notes
 
 ## Next step
 
-The next model comparison should keep the controller, safety policy, and
-parameters fixed while evaluating deterministic matching, MCL, and ICP across
-multiple maps and random seeds. The target is to distinguish a localization
-model failure from a genuinely unobservable map geometry before considering
-SLAM or Nav2 integration.
+The immediate next step is to determine whether the roughly `0.2 m` detour
+drift comes from wheel-yaw anchoring or from the wheel-position model. Only
+after that A/B comparison should the default estimator or localization gates
+be changed.
 
 ## License
 

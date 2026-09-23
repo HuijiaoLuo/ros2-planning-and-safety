@@ -28,6 +28,15 @@ a near-goal pose while `/odom` remained about `0.082 m` from the goal. This
 demonstrates a control-pose and local-observability failure, not a validated
 replacement for `/odom`.
 
+A separate wheel/state-estimation A/B now isolates the earlier detour drift.
+The original fixed-fusion estimator ended with about `0.19 m` position error
+in baseline and L-corridor scenes. With `fusion_mode:=ekf`,
+`position_mode:=propagated`, `gyro_bias_mode:=fixed`, and
+`wheel_yaw_noise_std_rad:=0.20`, seed-0 state error fell to `0.016 m` and
+`0.048 m`, and both runs reached the physical goal. This configuration is a
+candidate estimator/control prior, not yet a frozen default; three-seed
+validation is still required.
+
 Consequently, parameter changes are treated as controlled experiments rather
 than open-ended tuning. The calibrated EKF, safety policy, and high-rate
 control contract are frozen. The next model stage compares multi-hypothesis

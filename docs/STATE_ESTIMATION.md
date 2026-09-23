@@ -1,10 +1,9 @@
 # State Estimation
 
 This document describes the transparent wheel/IMU estimator used for the
-diagnostic heading and propagated-position experiments. It intentionally stops
-before full pose-EKF navigation. The
-covariance-aware EKF and the LiDAR-to-map localizer are documented separately
-in [`POSE_EKF.md`](POSE_EKF.md) and [`LOCALIZATION.md`](LOCALIZATION.md).
+diagnostic heading and propagated-position experiments. The covariance-aware
+full-pose EKF and the LiDAR-to-map localizer are documented separately in
+[`POSE_EKF.md`](POSE_EKF.md) and [`LOCALIZATION.md`](LOCALIZATION.md).
 
 ## Scope and data flow
 

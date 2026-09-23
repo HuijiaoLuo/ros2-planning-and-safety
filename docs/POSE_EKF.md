@@ -507,6 +507,28 @@ already calibrated. The EKF heading RMSE was not lower than the wheel-yaw
 reference in this row, so the filter should not yet be advertised as an
 accuracy improvement.
 
+## Detour-drift A/B result
+
+The first three-scenario matrix exposed a repeatable detour error of about
+`0.19 m` in the original fixed-fusion configuration. A focused v4 comparison
+then held the planner, controller, map, and seed fixed while changing only the
+estimator mode:
+
+| Configuration | Baseline final state error | L-corridor final state error |
+| --- | ---: | ---: |
+| fixed + `wheel_pose` | `0.185 m` | `0.185 m` |
+| adaptive + `propagated` | `0.214 m` | `0.201 m` |
+| EKF + `propagated`, estimated gyro bias | `0.165 m` | `0.163 m` |
+| EKF + `propagated`, fixed gyro bias, wheel yaw σ=`0.20 rad` | `0.016 m` | `0.048 m` |
+
+The last row also reached the physical goal in both seed-0 runs. Its final
+heading errors were `-0.006 rad` and `-0.021 rad`, while the wheel-yaw errors
+were still about `-0.109 rad` and `+0.074 rad`. This isolates the failure:
+the earlier EKF configuration trusted wheel yaw too strongly and its estimated
+gyro-bias state absorbed part of the wheel/trajectory mismatch. The fixed-bias
+and loose-wheel configuration is therefore the current candidate default, but
+it remains provisional until the three-seed validation completes.
+
 ## Covariance calibration trace
 
 The one-row metrics file cannot show whether the reported covariance is

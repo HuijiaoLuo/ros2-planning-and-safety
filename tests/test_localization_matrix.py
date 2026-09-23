@@ -69,6 +69,22 @@ class LocalizationMatrixTests(unittest.TestCase):
             "localization_max_total_correction_m:=0.350000", command
         )
 
+    def test_command_can_override_estimator_modes(self) -> None:
+        command = build_command(
+            RunSpec("baseline_obstacle", "v4", 0),
+            output_dir=Path("results/localization_matrix"),
+            experiment_timeout_s=120.0,
+            mcl_initialization_mode="local",
+            fusion_mode="adaptive",
+            position_mode="propagated",
+            gyro_bias_mode="fixed",
+            wheel_yaw_noise_std_rad=0.2,
+        )
+        self.assertIn("fusion_mode:=adaptive", command)
+        self.assertIn("position_mode:=propagated", command)
+        self.assertIn("gyro_bias_mode:=fixed", command)
+        self.assertIn("wheel_yaw_noise_std_rad:=0.200000", command)
+
     def test_incomplete_artifacts_are_not_a_successful_run(self) -> None:
         paths = {
             "evaluation": FakeArtifact(
