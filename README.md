@@ -15,6 +15,28 @@ one ROS 2 + Gazebo validation workflow.
 
 <p align="center"><em>A* planning, path following, and LiDAR-aware safety supervision.</em></p>
 
+## Navigation replay comparison
+
+<table>
+  <tr>
+    <th>Original fixed fusion</th>
+    <th>Validated EKF configuration</th>
+  </tr>
+  <tr>
+    <td><img src="docs/assets/baseline_obstacle_navigation.gif" alt="Baseline obstacle replay with fixed fusion" width="420"></td>
+    <td><img src="docs/assets/baseline_obstacle_ekf_navigation.gif" alt="Baseline obstacle replay with validated EKF" width="420"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/assets/l_corridor_navigation.gif" alt="L corridor replay with fixed fusion" width="420"></td>
+    <td><img src="docs/assets/l_corridor_ekf_navigation.gif" alt="L corridor replay with validated EKF" width="420"></td>
+  </tr>
+</table>
+
+The left column shows the original detour drift; the right column uses
+`fusion_mode:=ekf`, `position_mode:=propagated`, fixed zero gyro bias, and
+`wheel_yaw_noise_std_rad:=0.20`. Details and provenance are in
+[`docs/assets/README.md`](docs/assets/README.md).
+
 ## Status at a glance
 
 | Area | Status |
@@ -82,8 +104,8 @@ v4 run with `ekf + propagated`, fixed zero gyro bias, and `0.20 rad` wheel-yaw
 noise reduced the seed-0 state error to `0.016 m` in baseline and `0.048 m` in
 the L-corridor, with both runs reaching the goal. The follow-up three-seed
 validation completed `6/6` runs successfully, with mean final state errors of
-`0.0160 m` and `0.0435 m`. The source defaults remain unchanged until this
-validated candidate is explicitly promoted. The visual replay guide is in
+`0.0160 m` and `0.0435 m`. These parameters are now the source defaults for
+the wheel/IMU estimator. The visual replay guide is in
 [`docs/assets/README.md`](docs/assets/README.md).
 
 ## Quick start
@@ -237,11 +259,9 @@ docs/                  Focused estimation and localization notes
 
 ## Next step
 
-The wheel/state-estimation A/B is now validated across three seeds: the EKF
-with propagated position, fixed zero gyro bias, and `0.20 rad` wheel-yaw noise
-removed the detour drift in both tested scenes. The next implementation step
-is to promote this configuration deliberately, while keeping localization
-gates experimental and `/odom` as the validated reference.
+The wheel/state-estimation A/B is now validated across three seeds and has
+been promoted to the estimator defaults. Localization gates remain
+experimental, and `/odom` remains the validated physical reference.
 
 ## License
 

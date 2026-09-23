@@ -65,12 +65,12 @@ class HeadingEstimator(Node):
         self.declare_parameter(
             "external_position_topic", "/localization_candidate"
         )
-        self.declare_parameter("fusion_mode", "fixed")
+        self.declare_parameter("fusion_mode", "ekf")
         self.declare_parameter("wheel_weight", 0.02)
         self.declare_parameter("gyro_rate_noise_std_rad_s", 0.01)
-        self.declare_parameter("wheel_yaw_noise_std_rad", 0.07)
+        self.declare_parameter("wheel_yaw_noise_std_rad", 0.20)
         self.declare_parameter("gyro_bias_random_walk_std_rad_s2", 0.001)
-        self.declare_parameter("gyro_bias_mode", "estimated")
+        self.declare_parameter("gyro_bias_mode", "fixed")
         self.declare_parameter("initial_gyro_bias_rad_s", 0.0)
         self.declare_parameter("wheel_yaw_bias_random_walk_std_rad_sqrt_s", 0.001)
         self.declare_parameter("initial_position_variance_m2", 0.25)
@@ -103,7 +103,7 @@ class HeadingEstimator(Node):
         self.declare_parameter("imu_gyro_noise_std_rad_s", 0.0)
         self.declare_parameter("imu_gyro_noise_seed", 0)
         self.declare_parameter("wheel_slip_ratio", 0.0)
-        self.declare_parameter("position_mode", "wheel_pose")
+        self.declare_parameter("position_mode", "propagated")
 
         wheel_topic = str(self.get_parameter("wheel_odom_topic").value)
         imu_topic = str(self.get_parameter("imu_topic").value)

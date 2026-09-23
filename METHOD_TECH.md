@@ -36,8 +36,8 @@ in baseline and L-corridor scenes. With `fusion_mode:=ekf`,
 `0.048 m`, and both runs reached the physical goal. This configuration is a
 validated estimator/control prior: the follow-up three-seed matrix completed
 all `6/6` baseline/L-corridor runs successfully, with mean final state errors
-of `0.0160 m` and `0.0435 m`. The source defaults are still unchanged until
-this configuration is explicitly promoted.
+of `0.0160 m` and `0.0435 m`. These parameters are now the source defaults for
+the wheel/IMU estimator; `/odom` remains the validated physical reference.
 
 Consequently, parameter changes are treated as controlled experiments rather
 than open-ended tuning. The calibrated EKF, safety policy, and high-rate

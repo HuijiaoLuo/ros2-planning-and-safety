@@ -463,7 +463,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "position_mode",
-                default_value="wheel_pose",
+                default_value="propagated",
                 description="Estimator position mode: wheel_pose or propagated.",
             ),
             DeclareLaunchArgument(
@@ -812,7 +812,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "fusion_mode",
-                default_value="fixed",
+                default_value="ekf",
                 description="Fusion mode: fixed, adaptive heading, or full pose EKF.",
             ),
             DeclareLaunchArgument(
@@ -830,8 +830,8 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "wheel_yaw_noise_std_rad",
-                default_value="0.07",
-                description="Wheel yaw standard deviation used by adaptive fusion.",
+                default_value="0.20",
+                description="Wheel yaw standard deviation used by adaptive fusion or the pose EKF.",
             ),
             DeclareLaunchArgument(
                 "gyro_bias_random_walk_std_rad_s2",
@@ -840,7 +840,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "gyro_bias_mode",
-                default_value="estimated",
+                default_value="fixed",
                 description="Pose-EKF gyro-bias mode: estimated or fixed.",
             ),
             DeclareLaunchArgument(

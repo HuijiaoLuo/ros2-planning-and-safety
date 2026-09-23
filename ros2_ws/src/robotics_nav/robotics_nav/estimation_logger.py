@@ -78,13 +78,13 @@ class EstimationLogger(Node):
         self.declare_parameter("configured_imu_gyro_noise_seed", 0)
         self.declare_parameter("configured_wheel_slip_ratio", 0.0)
         self.declare_parameter("configured_wheel_slip_noise_std", 0.0)
-        self.declare_parameter("configured_position_mode", "wheel_pose")
+        self.declare_parameter("configured_position_mode", "propagated")
         self.declare_parameter("configured_wheel_weight", 0.02)
-        self.declare_parameter("configured_fusion_mode", "fixed")
+        self.declare_parameter("configured_fusion_mode", "ekf")
         self.declare_parameter("configured_external_position_fusion", False)
         self.declare_parameter("configured_gyro_rate_noise_std_rad_s", 0.01)
-        self.declare_parameter("configured_wheel_yaw_noise_std_rad", 0.07)
-        self.declare_parameter("configured_gyro_bias_mode", "estimated")
+        self.declare_parameter("configured_wheel_yaw_noise_std_rad", 0.20)
+        self.declare_parameter("configured_gyro_bias_mode", "fixed")
         self.declare_parameter("configured_initial_gyro_bias_rad_s", 0.0)
         self.declare_parameter(
             "configured_gyro_bias_random_walk_std_rad_s2", 0.001

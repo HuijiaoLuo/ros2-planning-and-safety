@@ -526,11 +526,11 @@ heading errors were `-0.006 rad` and `-0.021 rad`, while the wheel-yaw errors
 were still about `-0.109 rad` and `+0.074 rad`. This isolates the failure:
 the earlier EKF configuration trusted wheel yaw too strongly and its estimated
 gyro-bias state absorbed part of the wheel/trajectory mismatch. The fixed-bias
-and loose-wheel configuration is therefore the validated candidate estimator
-prior: all six baseline/L-corridor runs across three seeds completed
-successfully, with mean final state errors of `0.0160 m` and `0.0435 m`.
-The source defaults remain unchanged until the configuration is explicitly
-promoted.
+and loose-wheel configuration is therefore the validated estimator prior: all
+six baseline/L-corridor runs across three seeds completed successfully, with
+mean final state errors of `0.0160 m` and `0.0435 m`. It is now the source
+default for the wheel/IMU estimator. Explicit launch overrides remain available
+for historical fixed, adaptive, and estimated-bias comparisons.
 
 ## Covariance calibration trace
 
