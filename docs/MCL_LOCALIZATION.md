@@ -54,17 +54,14 @@ $$
 $$
 
 $$
-\begin{bmatrix}
-x_k^{(j)} \\
-y_k^{(j)} \\
+\begin{aligned}
+x_k^{(j)}
+&=x_{k-1}^{(j)} + \Delta s_k^{(j)}\cos\left(\theta_{\mathrm{mid},k}^{(j)}\right),\\
+y_k^{(j)}
+&=y_{k-1}^{(j)} + \Delta s_k^{(j)}\sin\left(\theta_{\mathrm{mid},k}^{(j)}\right),\\
 \theta_k^{(j)}
-\end{bmatrix}
-=
-\begin{bmatrix}
-x_{k-1}^{(j)} + \Delta s_k^{(j)}\cos\left(\theta_{\mathrm{mid},k}^{(j)}\right) \\
-y_{k-1}^{(j)} + \Delta s_k^{(j)}\sin\left(\theta_{\mathrm{mid},k}^{(j)}\right) \\
-\mathrm{wrap}\left(\theta_{k-1}^{(j)} + \Delta\theta_k^{(j)}\right)
-\end{bmatrix}
+&=\mathrm{wrap}\left(\theta_{k-1}^{(j)} + \Delta\theta_k^{(j)}\right).
+\end{aligned}
 $$
 
 Independent motion noise is sampled per particle. This is process uncertainty,
@@ -79,17 +76,12 @@ occupied-cell centre. This rasterized distance is used in a Gaussian
 likelihood field:
 
 $$
-\mathbf{p}_{i}^{\mathrm{map},(j)}
-=
-\begin{bmatrix}
-x^{(j)} \\
-y^{(j)}
-\end{bmatrix}
-+ R\left(\theta^{(j)}\right)
-\begin{bmatrix}
-r_i\cos\left(\alpha_i\right) \\
-r_i\sin\left(\alpha_i\right)
-\end{bmatrix}
+\begin{aligned}
+p_{i,x}^{\mathrm{map},(j)}
+&=x^{(j)} + r_i\cos\left(\theta^{(j)}+\alpha_i\right),\\
+p_{i,y}^{\mathrm{map},(j)}
+&=y^{(j)} + r_i\sin\left(\theta^{(j)}+\alpha_i\right).
+\end{aligned}
 $$
 
 $$
@@ -271,11 +263,11 @@ far outside the uncertainty of the continuously propagated state. The adapter
 therefore records a covariance-weighted displacement diagnostic. Let
 
 $$
-\delta p_k =
-\begin{bmatrix}
-x_k^{\mathrm{candidate}}-x_k^{\mathrm{source}} \\
+\delta p_k
+=\left(
+x_k^{\mathrm{candidate}}-x_k^{\mathrm{source}},
 y_k^{\mathrm{candidate}}-y_k^{\mathrm{source}}
-\end{bmatrix}
+\right)^{\mathsf T}
 $$
 
 and let the approximate displacement covariance be

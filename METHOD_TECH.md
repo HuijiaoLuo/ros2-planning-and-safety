@@ -457,12 +457,7 @@ prior, search-boundary flag, and score decomposition, so an apparently low
 score is not confused with a unique physical match. The selected objective is
 
 $$
-\begin{aligned}
-J
-&= e_{\mathrm{scan}} \\
-&\quad + w_{\mathrm{prior}}\left(\Delta x^2 + \Delta y^2\right) \\
-&\quad + w_{\mathrm{yaw}}\Delta\theta^2.
-\end{aligned}
+J = e_{\mathrm{scan}} + w_{\mathrm{prior}}\left(\Delta x^2 + \Delta y^2\right) + w_{\mathrm{yaw}}\Delta\theta^2.
 $$
 
 where $e_{\mathrm{scan}}$ is the mean LiDAR/map residual, and
