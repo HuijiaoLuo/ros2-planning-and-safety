@@ -222,7 +222,7 @@ moving or stale estimate cannot directly latch the goal.
 An experimental known-map particle-filter localizer is available as an
 alternative to the deterministic local matcher. It maintains multiple pose
 hypotheses and reports covariance and ambiguity; see
-[`MCL_LOCALIZATION.md`](MCL_LOCALIZATION.md) for the model and limitations.
+[`MCL_LOCALIZATION.md`](docs/MCL_LOCALIZATION.md) for the model and limitations.
 
 ## Quick start
 
