@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 from pathlib import Path
 import time
@@ -85,6 +86,10 @@ class EvaluationLogger(Node):
             "localization_score_improvement_topic",
             "/localization_score_improvement_m",
         )
+        self.declare_parameter(
+            "goal_event_topic",
+            "/path_follower_goal_event",
+        )
 
         self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
         self.front_angle = math.radians(
@@ -157,6 +162,9 @@ class EvaluationLogger(Node):
         self.localization_score_improvement_topic = str(
             self.get_parameter("localization_score_improvement_topic").value
         )
+        self.goal_event_topic = str(
+            self.get_parameter("goal_event_topic").value
+        )
         safety_override_topic = str(
             self.get_parameter("safety_override_topic").value
         )
@@ -181,6 +189,22 @@ class EvaluationLogger(Node):
         self.latest_localization_match_status: Optional[str] = None
         self.latest_localization_match_score_m: Optional[float] = None
         self.latest_localization_score_improvement_m: Optional[float] = None
+        self.latest_controller_goal_event: Optional[str] = None
+        self.controller_goal_event_count = 0
+        self.controller_goal_events = []
+
+        # Monotonic receipt times are deliberately kept separate from ROS
+        # header stamps.  Header stamps describe when data was generated in
+        # the simulation; receipt times describe when this logger observed it.
+        self.odom_received_at: Optional[float] = None
+        self.navigation_received_at: Optional[float] = None
+        self.state_estimate_received_at: Optional[float] = None
+        self.scan_received_at: Optional[float] = None
+        self.raw_command_received_at: Optional[float] = None
+        self.safe_command_received_at: Optional[float] = None
+        self.localization_valid_received_at: Optional[float] = None
+        self.localization_status_received_at: Optional[float] = None
+        self.controller_goal_event_received_at: Optional[float] = None
 
         self.start_x: Optional[float] = None
         self.start_y: Optional[float] = None
@@ -318,6 +342,12 @@ class EvaluationLogger(Node):
             self.localization_score_improvement_callback,
             10,
         )
+        self.create_subscription(
+            String,
+            self.goal_event_topic,
+            self.controller_goal_event_callback,
+            10,
+        )
         self.timer = self.create_timer(1.0 / sample_rate, self.sample)
         self.timeout_timer = self.create_timer(0.1, self.check_experiment_timeout)
 
@@ -342,13 +372,16 @@ class EvaluationLogger(Node):
 
     def odom_callback(self, message: Odometry) -> None:
         self.latest_odom = message
+        self.odom_received_at = time.monotonic()
 
     def navigation_pose_callback(self, message: Odometry) -> None:
         self.latest_navigation_pose = message
+        self.navigation_received_at = time.monotonic()
 
     def state_estimate_callback(self, message: Odometry) -> None:
         """Record the pre-localization state estimate for diagnosis only."""
         self.latest_state_estimate = message
+        self.state_estimate_received_at = time.monotonic()
 
     def plan_callback(self, message: NavPath) -> None:
         """Track the initial/latest rasterized plan and its endpoint."""
@@ -378,9 +411,11 @@ class EvaluationLogger(Node):
 
     def scan_callback(self, message: LaserScan) -> None:
         self.latest_scan = message
+        self.scan_received_at = time.monotonic()
 
     def raw_command_callback(self, message: Twist) -> None:
         self.latest_raw_command = message
+        self.raw_command_received_at = time.monotonic()
 
     def safe_command_callback(self, message: Twist) -> None:
         """Record the command after the LiDAR safety layer has gated it.
@@ -391,6 +426,7 @@ class EvaluationLogger(Node):
         recovery spin distinguishable from a path-follower heading command.
         """
         self.latest_safe_command = message
+        self.safe_command_received_at = time.monotonic()
 
     def override_state_callback(self, message: Bool) -> None:
         self.latest_override_state = bool(message.data)
@@ -415,15 +451,31 @@ class EvaluationLogger(Node):
 
     def localization_match_valid_callback(self, message: Bool) -> None:
         self.latest_localization_match_valid = bool(message.data)
+        self.localization_valid_received_at = time.monotonic()
 
     def localization_match_status_callback(self, message: String) -> None:
         self.latest_localization_match_status = str(message.data)
+        self.localization_status_received_at = time.monotonic()
+
+    def controller_goal_event_callback(self, message: String) -> None:
+        """Record terminal-decision events emitted by the path follower."""
+        self.latest_controller_goal_event = str(message.data)
+        self.controller_goal_event_count += 1
+        self.controller_goal_events.append(str(message.data))
+        self.controller_goal_event_received_at = time.monotonic()
 
     def localization_match_score_callback(self, message: Float64) -> None:
         self.latest_localization_match_score_m = float(message.data)
 
     def localization_score_improvement_callback(self, message: Float64) -> None:
         self.latest_localization_score_improvement_m = float(message.data)
+
+    @staticmethod
+    def receipt_age(now: float, received_at: Optional[float]) -> Optional[float]:
+        """Return logger-observed age in the local monotonic clock domain."""
+        if received_at is None:
+            return None
+        return max(0.0, now - received_at)
 
     @staticmethod
     def yaw_from_quaternion(orientation) -> float:
@@ -475,6 +527,7 @@ class EvaluationLogger(Node):
             return
 
         now = time.monotonic()
+        logger_ros_timestamp = self.get_clock().now().nanoseconds * 1.0e-9
         delta_time = (
             0.0
             if self.last_sample_time is None
@@ -603,6 +656,32 @@ class EvaluationLogger(Node):
             )
         )
 
+        receipt_ages = {
+            "odom_receipt_age_s": self.receipt_age(now, self.odom_received_at),
+            "navigation_receipt_age_s": self.receipt_age(
+                now, self.navigation_received_at
+            ),
+            "state_estimate_receipt_age_s": self.receipt_age(
+                now, self.state_estimate_received_at
+            ),
+            "scan_receipt_age_s": self.receipt_age(now, self.scan_received_at),
+            "raw_command_receipt_age_s": self.receipt_age(
+                now, self.raw_command_received_at
+            ),
+            "executed_command_receipt_age_s": self.receipt_age(
+                now, self.safe_command_received_at
+            ),
+            "localization_valid_receipt_age_s": self.receipt_age(
+                now, self.localization_valid_received_at
+            ),
+            "localization_status_receipt_age_s": self.receipt_age(
+                now, self.localization_status_received_at
+            ),
+            "controller_goal_event_receipt_age_s": self.receipt_age(
+                now, self.controller_goal_event_received_at
+            ),
+        }
+
         raw_linear_x = (
             None if self.latest_raw_command is None else self.latest_raw_command.linear.x
         )
@@ -624,7 +703,13 @@ class EvaluationLogger(Node):
                 "time_s": now - self.started_at,
                 "x_m": current_x,
                 "y_m": current_y,
+                "logger_ros_timestamp_s": logger_ros_timestamp,
                 "odom_timestamp_s": self.stamp_seconds(self.latest_odom),
+                "scan_timestamp_s": (
+                    None
+                    if self.latest_scan is None
+                    else self.stamp_seconds(self.latest_scan)
+                ),
                 "navigation_timestamp_s": (
                     None
                     if navigation_pose is None
@@ -692,6 +777,9 @@ class EvaluationLogger(Node):
                 "localization_score_improvement_m": (
                     self.latest_localization_score_improvement_m
                 ),
+                "controller_goal_event": self.latest_controller_goal_event,
+                "controller_goal_event_count": self.controller_goal_event_count,
+                **receipt_ages,
             }
         )
 
@@ -816,6 +904,25 @@ class EvaluationLogger(Node):
                 self.state_estimate_goal_reached_at is not None
             ),
             "state_estimate_final_error_m": state_estimate_final_error,
+            "controller_goal_event": (
+                None
+                if final_sample is None
+                else final_sample.get("controller_goal_event")
+            ),
+            "controller_goal_event_count": (
+                0
+                if final_sample is None
+                else final_sample.get("controller_goal_event_count", 0)
+            ),
+            "controller_goal_event_history": json.dumps(
+                self.controller_goal_events,
+                separators=(",", ":"),
+            ),
+            "controller_goal_event_receipt_age_s": (
+                None
+                if final_sample is None
+                else final_sample.get("controller_goal_event_receipt_age_s")
+            ),
             "final_executed_linear_x_mps": (
                 None
                 if final_sample is None
@@ -828,6 +935,11 @@ class EvaluationLogger(Node):
             ),
             "evaluation_final_sample_time_s": (
                 None if final_sample is None else final_sample.get("time_s")
+            ),
+            "evaluation_final_logger_ros_timestamp_s": (
+                None
+                if final_sample is None
+                else final_sample.get("logger_ros_timestamp_s")
             ),
             "evaluation_final_odom_timestamp_s": (
                 None
@@ -967,7 +1079,9 @@ class EvaluationLogger(Node):
                 "time_s",
                 "x_m",
                 "y_m",
+                "logger_ros_timestamp_s",
                 "odom_timestamp_s",
+                "scan_timestamp_s",
                 "navigation_timestamp_s",
                 "state_estimate_timestamp_s",
                 "navigation_timestamp_offset_s",
@@ -999,6 +1113,18 @@ class EvaluationLogger(Node):
                 "localization_match_status",
                 "localization_match_score_m",
                 "localization_score_improvement_m",
+                "controller_goal_event",
+                "controller_goal_event_count",
+                "controller_goal_event_history",
+                "odom_receipt_age_s",
+                "navigation_receipt_age_s",
+                "state_estimate_receipt_age_s",
+                "scan_receipt_age_s",
+                "raw_command_receipt_age_s",
+                "executed_command_receipt_age_s",
+                "localization_valid_receipt_age_s",
+                "localization_status_receipt_age_s",
+                "controller_goal_event_receipt_age_s",
             ]
             with trace_path.open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.DictWriter(handle, fieldnames=trace_fields)

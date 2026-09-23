@@ -28,6 +28,7 @@ def generate_launch_description():
     scan_noise_std_m = LaunchConfiguration("scan_noise_std_m")
     scan_noise_seed = LaunchConfiguration("scan_noise_seed")
     navigation_pose_topic = LaunchConfiguration("navigation_pose_topic")
+    goal_event_topic = LaunchConfiguration("goal_event_topic")
     goal_tolerance = LaunchConfiguration("goal_tolerance")
     estimation_output = LaunchConfiguration("estimation_output")
     estimation_trace_output = LaunchConfiguration("estimation_trace_output")
@@ -205,6 +206,14 @@ def generate_launch_description():
                 "navigation_pose_topic",
                 default_value="/odom",
                 description="Pose topic consumed by navigation and safety nodes.",
+            ),
+            DeclareLaunchArgument(
+                "goal_event_topic",
+                default_value="/path_follower_goal_event",
+                description=(
+                    "Topic carrying timestamped path-follower terminal events "
+                    "for temporal consistency diagnostics."
+                ),
             ),
             DeclareLaunchArgument(
                 "goal_tolerance",
@@ -625,6 +634,7 @@ def generate_launch_description():
                     "scan_noise_std_m": scan_noise_std_m,
                     "scan_noise_seed": scan_noise_seed,
                     "navigation_pose_topic": navigation_pose_topic,
+                    "goal_event_topic": goal_event_topic,
                     "goal_tolerance": goal_tolerance,
                     "estimation_output": estimation_output,
                     "estimation_trace_output": estimation_trace_output,

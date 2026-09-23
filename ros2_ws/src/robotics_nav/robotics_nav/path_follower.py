@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import math
+import time
 from typing import Optional
 
 import rclpy
@@ -97,6 +98,10 @@ class PathFollower(Node):
         self.declare_parameter("goal_reference_topic", "/state_estimate")
         self.declare_parameter("goal_reference_tolerance", -1.0)
         self.declare_parameter("goal_reference_position_sigma_max_m", 0.15)
+        self.declare_parameter(
+            "goal_event_topic",
+            "/path_follower_goal_event",
+        )
         # Grid paths contain sharp 90-degree corners. Rotate before driving
         # through a large heading error instead of cutting the corner.
         self.declare_parameter("rotate_in_place_threshold", math.pi / 6.0)
@@ -150,6 +155,7 @@ class PathFollower(Node):
         self.goal_reference_position_sigma_max_m = float(
             self.get_parameter("goal_reference_position_sigma_max_m").value
         )
+        goal_event_topic = str(self.get_parameter("goal_event_topic").value)
         self.require_goal_reference_for_goal = (
             odom_topic == "/localized_estimate"
             and self.goal_reference_topic != odom_topic
@@ -160,6 +166,11 @@ class PathFollower(Node):
         publish_rate = float(self.get_parameter("publish_rate_hz").value)
 
         self.publisher = self.create_publisher(Twist, "/cmd_vel_raw", 10)
+        self.goal_event_publisher = self.create_publisher(
+            String,
+            goal_event_topic,
+            10,
+        )
 
         path_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -220,6 +231,53 @@ class PathFollower(Node):
         self.in_goal_tolerance = False
         self.latest_goal_reference: Optional[Odometry] = None
         self.goal_confirmation_count = 0
+
+    @staticmethod
+    def stamp_seconds(message: Odometry) -> float:
+        """Return the source timestamp carried by an odometry message."""
+        stamp = message.header.stamp
+        return float(stamp.sec) + 1.0e-9 * float(stamp.nanosec)
+
+    def publish_goal_event(
+        self,
+        event: str,
+        goal_distance: Optional[float],
+    ) -> None:
+        """Publish a timestamped controller decision for temporal audits.
+
+        The normal velocity-control behavior is intentionally unchanged.  The
+        event contains both the controller's current ROS time and the source
+        timestamp of the pose consumed by this callback, so an offline audit
+        can distinguish a fresh terminal decision from one based on an old
+        estimate.  ``wall_time_s`` is monotonic and is only useful for
+        comparing callback receipt order within one process.
+        """
+        node_stamp = self.get_clock().now().nanoseconds * 1.0e-9
+        pose_stamp = (
+            None
+            if self.latest_odom is None
+            else self.stamp_seconds(self.latest_odom)
+        )
+        pose_age = (
+            None
+            if pose_stamp is None
+            else node_stamp - pose_stamp
+        )
+        pose_stamp_text = "" if pose_stamp is None else f"{pose_stamp:.9f}"
+        pose_age_text = "" if pose_age is None else f"{pose_age:.9f}"
+        goal_distance_text = (
+            "" if goal_distance is None else f"{goal_distance:.9f}"
+        )
+        message = String()
+        message.data = (
+            f"event={event};"
+            f"node_stamp_s={node_stamp:.9f};"
+            f"pose_stamp_s={pose_stamp_text};"
+            f"pose_age_s={pose_age_text};"
+            f"goal_distance_m={goal_distance_text};"
+            f"wall_time_s={time.monotonic():.9f}"
+        )
+        self.goal_event_publisher.publish(message)
 
         self.get_logger().info(
             "Path follower inputs: "
@@ -415,13 +473,13 @@ class PathFollower(Node):
             self.publish_stop()
             return
         if goal_distance <= self.goal_tolerance:
+            if not self.in_goal_tolerance:
+                self.in_goal_tolerance = True
+                # Accepted events from before entering the goal tolerance do
+                # not count toward this terminal confirmation window.
+                self.localization_accepted_events_since_entry = 0
+                self.publish_goal_event("goal_tolerance_entered", goal_distance)
             if self.require_localization_match_for_goal:
-                if not self.in_goal_tolerance:
-                    # Start a new confirmation window. An accepted status
-                    # from before entering the goal does not count toward
-                    # terminal confirmation.
-                    self.in_goal_tolerance = True
-                    self.localization_accepted_events_since_entry = 0
                 if self.localization_match_valid is not True:
                     self.goal_confirmation_count = 0
                     self.localization_accepted_events_since_entry = 0
@@ -505,6 +563,7 @@ class PathFollower(Node):
                     self.publish_stop()
                     return
             if not self.goal_reached:
+                self.publish_goal_event("goal_reached_latched", goal_distance)
                 self.get_logger().info("Planned path goal reached.")
                 self.goal_reached = True
             self.report_state(
@@ -513,6 +572,8 @@ class PathFollower(Node):
             self.publish_stop()
             return
         self.goal_confirmation_count = 0
+        if self.in_goal_tolerance:
+            self.publish_goal_event("goal_tolerance_exited", goal_distance)
         self.in_goal_tolerance = False
         self.localization_accepted_events_since_entry = 0
 

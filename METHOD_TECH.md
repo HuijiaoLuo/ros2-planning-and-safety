@@ -184,6 +184,7 @@ where $L$ is the distance between the wheel contact points. Gazebo's DiffDrive s
 | /localization_score_improvement_m | std_msgs/msg/Float64 | Localizer → diagnostics | Input-pose score minus candidate score |
 | /localization_match_valid | std_msgs/msg/Bool | Localizer → diagnostics | Whether the latest match passed the safety gates |
 | /localization_match_status | std_msgs/msg/String | Localizer → diagnostics | Reason for accepting or rejecting the latest match |
+| /path_follower_goal_event | std_msgs/msg/String | Controller → evaluation logger | Timestamped goal-tolerance and terminal-latch events for temporal audits |
 | /cmd_vel_raw | geometry_msgs/msg/Twist | Controller → safety layer | Unchecked motion request |
 | /cmd_vel | geometry_msgs/msg/Twist | Safety layer → Gazebo | Command allowed to reach robot |
 
@@ -1610,6 +1611,8 @@ The current ROS2 milestone includes:
   spread, score margin, and covariance-gate diagnostics;
 - synchronized evaluation traces containing estimator timestamps, executed
   commands, localization status, and candidate/applied correction fields;
+- temporal decision diagnostics containing source-pose and LiDAR timestamps,
+  logger receipt ages, controller goal events, and event history;
 - planner/safety clearance alignment through one effective planning-clearance
   model, eliminating the previously observed recovery-turn loop;
 - a Gazebo goal marker that remains visible but is excluded from the LiDAR mask.
@@ -1623,6 +1626,10 @@ The current limitations are equally important:
   wrong enough to place the physical robot outside the goal tolerance;
 - sparse raster-map scans can produce ambiguous nearby minima, and the
   asynchronous matcher can return stale or repeated candidates;
+- a localized pose may enter the goal tolerance while the controller is still
+  waiting for independent confirmation; the current implementation records
+  this terminal-decision timeline but does not yet apply a new freshness or
+  dwell-time policy;
 - LiDAR corrections are external map-to-odom updates, not LiDAR measurements
   fused inside the pose EKF;
 - the bounded local matcher is not full ICP, SLAM, loop closure, or globally
@@ -1635,6 +1642,10 @@ interpretable:
   LiDAR-map matching;
 - gated, process-backed LiDAR-map correction remains experimental;
 - covariance-aware pose EKF and comparison with the transparent estimator;
+- fixed-configuration temporal consistency and failure-propagation experiments
+  connecting message age to goal decisions and physical stopping error;
+- only after the timing failure is isolated, a minimal freshness, dwell, or
+  latency-compensation change;
 - multi-seed validation of localization-to-control and localization-to-safety
   failure propagation;
 - only after that, a separate SLAM/Nav2 integration study;

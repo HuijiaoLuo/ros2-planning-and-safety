@@ -21,6 +21,7 @@ def generate_launch_description():
     scan_noise_std_m = LaunchConfiguration("scan_noise_std_m")
     scan_noise_seed = LaunchConfiguration("scan_noise_seed")
     navigation_pose_topic = LaunchConfiguration("navigation_pose_topic")
+    goal_event_topic = LaunchConfiguration("goal_event_topic")
     goal_tolerance = LaunchConfiguration("goal_tolerance")
     estimation_output = LaunchConfiguration("estimation_output")
     estimation_trace_output = LaunchConfiguration("estimation_trace_output")
@@ -220,6 +221,14 @@ def generate_launch_description():
                 description=(
                     "Pose topic consumed by navigation and safety nodes. "
                     "The default /odom preserves the ideal V2 baseline."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "goal_event_topic",
+                default_value="/path_follower_goal_event",
+                description=(
+                    "Topic carrying timestamped path-follower terminal events "
+                    "for temporal consistency diagnostics."
                 ),
             ),
             DeclareLaunchArgument(
@@ -741,6 +750,7 @@ def generate_launch_description():
                         "final_approach_max_angular_speed": 0.60,
                         "heading_deadband": 0.03,
                         "odom_topic": navigation_pose_topic,
+                        "goal_event_topic": goal_event_topic,
                     }
                 ],
             ),
@@ -819,6 +829,7 @@ def generate_launch_description():
                         "planning_radius_m": planning_radius_m,
                         "experiment_timeout_s": experiment_timeout_s,
                         "navigation_pose_topic": navigation_pose_topic,
+                        "goal_event_topic": goal_event_topic,
                     }
                 ],
             ),

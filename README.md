@@ -168,6 +168,13 @@ planner, and safety configuration are therefore frozen for the next multi-seed
 failure-propagation study. Existing replay, trace-diagnosis, observability,
 and score-consistency tools are used before any further algorithm change.
 
+The next diagnostic layer records the temporal chain behind a terminal
+decision: source pose stamps, LiDAR stamps, logger receipt ages, controller
+events for entering and latching the goal tolerance, and the controller pose
+age embedded in each event. This makes it possible to distinguish estimator
+error, localization latency, stale state consumption, and premature terminal
+logic without changing the frozen estimator or matcher configuration.
+
 ### State-estimation and localization status
 
 The estimator compares `/wheel_odom`, pure gyro integration, and
@@ -182,6 +189,10 @@ covariance/freshness gates help explain ambiguous or stale candidates, but they
 do not turn the bounded local matcher into SLAM. The covariance-aware pose EKF
 is also diagnostic-only until its physical error, covariance calibration, NIS
 values, and measurement rejection behavior are validated across fixed seeds.
+The controller currently exposes this timing evidence but does not yet apply a
+new freshness gate, dwell-time rule, or latency-compensated pose; those changes
+are deferred until the temporal failure-propagation experiment identifies the
+responsible layer.
 
 ## Quick start
 
