@@ -751,6 +751,7 @@ def generate_launch_description():
                         "heading_deadband": 0.03,
                         "odom_topic": navigation_pose_topic,
                         "goal_event_topic": goal_event_topic,
+                        "use_sim_time": True,
                     }
                 ],
             ),
@@ -830,6 +831,7 @@ def generate_launch_description():
                         "experiment_timeout_s": experiment_timeout_s,
                         "navigation_pose_topic": navigation_pose_topic,
                         "goal_event_topic": goal_event_topic,
+                        "use_sim_time": True,
                     }
                 ],
             ),

@@ -91,6 +91,10 @@ def main() -> int:
     print(f"trace_samples: {len(rows)}")
     print(f"controller_event_transitions: {len(transitions)}")
     for index, fields in transitions:
+        pose_age = number(fields.get("pose_age_s"))
+        pose_age_text = fields.get("pose_age_s", "")
+        if pose_age is not None and abs(pose_age) > 1000.0:
+            pose_age_text += " [CLOCK_DOMAIN_MISMATCH]"
         print(
             "event[{index}]: {event} node_stamp_s={node} "
             "pose_stamp_s={pose} pose_age_s={age} goal_distance_m={distance}".format(
@@ -98,7 +102,7 @@ def main() -> int:
                 event=fields.get("event", ""),
                 node=fields.get("node_stamp_s", ""),
                 pose=fields.get("pose_stamp_s", ""),
-                age=fields.get("pose_age_s", ""),
+                age=pose_age_text,
                 distance=fields.get("goal_distance_m", ""),
             )
         )
@@ -133,10 +137,13 @@ def main() -> int:
         ("navigation_header_age_s", navigation_stamp_ages),
     ):
         if values:
-            print(
-                f"{label}: mean={sum(values) / len(values):.6f} "
-                f"max={max(values):.6f} samples={len(values)}"
-            )
+            if max(abs(value) for value in values) > 1000.0:
+                print(f"{label}: CLOCK_DOMAIN_MISMATCH samples={len(values)}")
+            else:
+                print(
+                    f"{label}: mean={sum(values) / len(values):.6f} "
+                    f"max={max(values):.6f} samples={len(values)}"
+                )
 
     enter_index = next(
         (index for index, fields in transitions
