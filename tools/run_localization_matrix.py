@@ -217,6 +217,14 @@ def write_manifest(path: Path, rows: list[dict[str, object]]) -> None:
         writer.writerows(rows)
 
 
+def load_manifest(path: Path) -> list[dict[str, object]]:
+    """Load an existing manifest so a partial matrix can be resumed safely."""
+    if not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8") as handle:
+        return [dict(row) for row in csv.DictReader(handle)]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a fixed scenario/backend/seed localization matrix."
@@ -344,7 +352,14 @@ def main() -> int:
     if not args.dry_run:
         args.output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = args.output_dir / "matrix_manifest.csv"
-    manifest_rows: list[dict[str, object]] = []
+    manifest_rows: list[dict[str, object]] = (
+        [] if args.dry_run else load_manifest(manifest_path)
+    )
+    manifest_indices = {
+        str(row.get("stem", "")): index
+        for index, row in enumerate(manifest_rows)
+        if row.get("stem")
+    }
 
     print(f"Prepared {len(specs)} runs in {args.output_dir}")
     for index, spec in enumerate(specs, start=1):
@@ -397,22 +412,26 @@ def main() -> int:
                     file=sys.stderr,
                 )
 
-        manifest_rows.append(
-            {
-                "scenario": spec.scenario,
-                "backend": spec.backend,
-                "seed": spec.seed,
-                "stem": spec.stem,
-                "return_code": return_code,
-                "completed": completed,
-                "failure_reason": failure_reason,
-                "duration_s": f"{duration_s:.3f}",
-                "evaluation_file": str(paths["evaluation"]),
-                "metrics_file": str(paths["metrics"]),
-                "diagnostic_file": str(paths["diagnostic"]),
-                "launch_log": str(paths["launch_log"]),
-            }
-        )
+        manifest_row = {
+            "scenario": spec.scenario,
+            "backend": spec.backend,
+            "seed": spec.seed,
+            "stem": spec.stem,
+            "return_code": return_code,
+            "completed": completed,
+            "failure_reason": failure_reason,
+            "duration_s": f"{duration_s:.3f}",
+            "evaluation_file": str(paths["evaluation"]),
+            "metrics_file": str(paths["metrics"]),
+            "diagnostic_file": str(paths["diagnostic"]),
+            "launch_log": str(paths["launch_log"]),
+        }
+        existing_index = manifest_indices.get(spec.stem)
+        if existing_index is None:
+            manifest_indices[spec.stem] = len(manifest_rows)
+            manifest_rows.append(manifest_row)
+        else:
+            manifest_rows[existing_index] = manifest_row
         if not args.dry_run:
             write_manifest(manifest_path, manifest_rows)
 

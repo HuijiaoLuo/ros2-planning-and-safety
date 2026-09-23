@@ -25,6 +25,15 @@ def optional_float(row: dict[str, str], key: str) -> float | None:
     return float(value)
 
 
+def optional_bool(row: dict[str, str], key: str) -> bool | None:
+    value = row.get(key, "").strip().lower()
+    if not value:
+        return None
+    if value not in {"true", "false"}:
+        raise ValueError(f"expected boolean in {key}, got {value!r}")
+    return value == "true"
+
+
 def distance_between(
     row: dict[str, str],
     first_x_key: str,
@@ -56,6 +65,9 @@ class DriftRecord:
     seed: int
     success: bool | None
     termination_reason: str
+    navigation_pose_topic: str
+    navigation_pose_is_independent: bool | None
+    navigation_pose_fallback_active: bool | None
     ground_truth_goal_error_m: float | None
     navigation_goal_error_m: float | None
     state_estimate_goal_error_m: float | None
@@ -92,6 +104,21 @@ def record_from_trace(
             ""
             if evaluation is None
             else evaluation.get("termination_reason", "").strip()
+        ),
+        navigation_pose_topic=(
+            ""
+            if evaluation is None
+            else evaluation.get("navigation_pose_topic", "").strip()
+        ),
+        navigation_pose_is_independent=(
+            None
+            if evaluation is None
+            else optional_bool(evaluation, "navigation_pose_is_independent_final")
+        ),
+        navigation_pose_fallback_active=(
+            None
+            if evaluation is None
+            else optional_bool(evaluation, "navigation_pose_fallback_active_final")
         ),
         ground_truth_goal_error_m=ground_truth_goal_error,
         navigation_goal_error_m=navigation_goal_error,
@@ -177,6 +204,13 @@ def format_statuses(records: Iterable[DriftRecord]) -> str:
     )
 
 
+def format_topics(records: Iterable[DriftRecord]) -> str:
+    topics = sorted(
+        {record.navigation_pose_topic or "unknown" for record in records}
+    )
+    return ";".join(topics)
+
+
 def summarize(records: Iterable[DriftRecord]) -> list[dict[str, object]]:
     grouped: dict[tuple[str, str], list[DriftRecord]] = {}
     for record in records:
@@ -191,6 +225,13 @@ def summarize(records: Iterable[DriftRecord]) -> list[dict[str, object]]:
                 "backend": backend,
                 "runs": len(group),
                 "seeds": ",".join(str(record.seed) for record in sorted(group, key=lambda item: item.seed)),
+                "navigation_pose_topic": format_topics(group),
+                "navigation_independent_runs": sum(
+                    record.navigation_pose_is_independent is True for record in group
+                ),
+                "navigation_fallback_runs": sum(
+                    record.navigation_pose_fallback_active is True for record in group
+                ),
                 "successes": sum(value is True for value in known_success),
                 "success_rate": (
                     sum(value is True for value in known_success) / len(known_success)
@@ -271,12 +312,15 @@ def main() -> int:
     write_csv(per_run_path, per_run)
     write_csv(summary_path, grouped)
 
-    print("scenario,backend,runs,success_rate,mean_nav_truth_error_m,"
-          "mean_state_truth_error_m,localization_statuses")
+    print("scenario,backend,runs,success_rate,navigation_pose_topic,"
+          "navigation_independent_runs,navigation_fallback_runs,"
+          "mean_nav_truth_error_m,mean_state_truth_error_m,localization_statuses")
     for row in grouped:
         print(
             f"{row['scenario']},{row['backend']},{row['runs']},"
-            f"{row['success_rate']},{row['mean_navigation_truth_error_m']},"
+            f"{row['success_rate']},{row['navigation_pose_topic']},"
+            f"{row['navigation_independent_runs']},{row['navigation_fallback_runs']},"
+            f"{row['mean_navigation_truth_error_m']},"
             f"{row['mean_state_estimate_truth_error_m']},"
             f"{row['localization_statuses']}"
         )

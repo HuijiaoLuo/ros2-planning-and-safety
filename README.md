@@ -134,7 +134,10 @@ noise reduced the seed-0 state error to `0.016 m` in baseline and `0.048 m` in
 the L-corridor, with both runs reaching the goal. The follow-up three-seed
 validation completed `6/6` runs successfully, with mean final state errors of
 `0.0160 m` and `0.0435 m`. These parameters are now the source defaults for
-the wheel/IMU estimator. The visual replay guide is in
+the wheel/IMU estimator. In those six validation runs, `/localized_estimate`
+fell back to `/state_estimate` at the final sample, so this result validates the
+wheel/IMU estimator rather than an independent map-localization correction. The
+visual replay guide is in
 [`docs/assets/README.md`](docs/assets/README.md).
 
 ## Quick start

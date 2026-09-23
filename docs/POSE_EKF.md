@@ -530,7 +530,25 @@ and loose-wheel configuration is therefore the validated estimator prior: all
 six baseline/L-corridor runs across three seeds completed successfully, with
 mean final state errors of `0.0160 m` and `0.0435 m`. It is now the source
 default for the wheel/IMU estimator. Explicit launch overrides remain available
-for historical fixed, adaptive, and estimated-bias comparisons.
+for historical fixed, adaptive, and estimated-bias comparisons. The validation
+matrix selected `/localized_estimate` as the navigation pose, but all six final
+samples used its fallback to `/state_estimate`; therefore this evidence validates
+the wheel/IMU estimator and does not yet validate an independent map-localization
+correction.
+
+To reproduce the explicit stream comparison, run:
+
+```bash
+python tools/analyze_localization_drift.py \
+  --input-dir results/estimator_validation_ekf_fixedgyro \
+  --output-dir results/estimator_validation_ekf_fixedgyro
+
+python tools/summarize_estimator_comparison.py
+```
+
+The generated table separates final `/odom`, `/state_estimate`, and
+`/localized_estimate` goal errors and records whether the localized stream was
+independent or fell back to the EKF state.
 
 ## Covariance calibration trace
 
